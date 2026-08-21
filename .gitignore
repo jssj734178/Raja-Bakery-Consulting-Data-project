@@ -1,0 +1,40 @@
+# Python virtual environment -- large, and fully regeneratable with
+# python -m venv venv + pip install, never worth tracking in git.
+venv/
+
+# Python bytecode cache -- auto-generated, never needed in version control.
+__pycache__/
+*.pyc
+
+# Trained model weights -- binary files, regeneratable by re-running
+# train.py / finetune.py. Git handles large binary files poorly (repo
+# size balloons, diffs are meaningless), so these are excluded by
+# default. Remove this line if you specifically want checkpoints
+# version-controlled instead.
+checkpoints/
+
+# Public MNIST data -- large-ish, and trivially re-downloaded any time
+# via the curl command already documented for data.py.
+data/
+
+# Real invoice photos and the labeled digit crops derived from them --
+# actual bakery business/customer data. Excluded by default, not just
+# for repo size, but because this is real business data that
+# shouldn't end up sitting in a git history, which is genuinely hard
+# to fully remove later, especially if this repo is ever pushed
+# anywhere shared.
+invoices/
+invoice_digits/
+*.pdf
+
+# OS-generated junk files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE workspace settings -- personal preference, not shared project config
+.vscode/
+.idea/
+
+# Claude Code's local, per-machine permission approvals -- not meant
+# to be shared or synced between machines or people.
+.claude/settings.local.json
