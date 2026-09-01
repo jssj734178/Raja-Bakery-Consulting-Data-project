@@ -53,6 +53,65 @@ def order_corners(pts: np.ndarray) -> np.ndarray:
     return np.array([top_left, top_right, bottom_right, bottom_left])
 
 
+def _fit_line_in_band(mask: np.ndarray, axis: str, band_low: float, band_high: float):
+    """
+    Fit a straight line through every foreground pixel of `mask` that
+    falls within a coordinate band -- e.g. "every horizontal-line pixel
+    whose y is within 400px of the table's approximate top edge."
+
+    Deliberately does NOT require those pixels to form one connected
+    component. Testing against this project's real scans showed the
+    outer border's OWN line, specifically, breaks into many small
+    disconnected fragments in the isolated horizontal/vertical-line
+    masks -- it's crossed by every internal row/column divider along
+    its full length, and each crossing turned out to interrupt
+    connectivity there even though internal single dividers (crossed
+    far less) stayed intact. Gathering every pixel in the band
+    regardless of which fragment it belongs to sidesteps that
+    fragmentation entirely. A robust distance metric (Huber, not plain
+    least-squares) keeps the fit from being thrown off by the rare
+    stray pixel that lands in the band without actually being part of
+    this border (e.g. a jagged mesh-notch corner).
+
+    Args:
+        mask: horizontal_lines or vertical_lines mask.
+        axis: "horizontal" or "vertical" -- which coordinate (y or x)
+            the band is measured along.
+        band_low: lower bound of the band, in pixels.
+        band_high: upper bound of the band, in pixels.
+
+    Returns:
+        (point, direction) -- a point on the fitted line and its unit
+        direction vector, both as length-2 float arrays -- or None if
+        no foreground pixels fall inside the band at all.
+    """
+    ys, xs = np.nonzero(mask)
+    coords = ys if axis == "horizontal" else xs
+    in_band = (coords >= band_low) & (coords <= band_high)
+    if not np.any(in_band):
+        return None
+
+    points = np.column_stack([xs[in_band], ys[in_band]]).astype(np.float32)
+    vx, vy, x0, y0 = cv2.fitLine(points, cv2.DIST_HUBER, 0, 0.01, 0.01).flatten()
+    return np.array([x0, y0]), np.array([vx, vy])
+
+
+def _intersect_lines(point1, direction1, point2, direction2):
+    """
+    Find where two infinite lines (each given as a point + direction)
+    cross, by solving point1 + t1*direction1 == point2 + t2*direction2
+    for (t1, t2) as a 2x2 linear system.
+
+    Used to turn the four fitted border lines (top/bottom/left/right)
+    into the four actual corner points -- each corner is just the
+    intersection of the two border lines that meet there.
+    """
+    a = np.array([[direction1[0], -direction2[0]], [direction1[1], -direction2[1]]])
+    b = np.array(point2) - np.array(point1)
+    t1, _ = np.linalg.solve(a, b)
+    return np.array(point1) + t1 * np.array(direction1)
+
+
 def detect_border_corners(image_bgr: np.ndarray) -> np.ndarray | None:
     """
     Find the four corners of the invoice table's outer grid border.
@@ -64,12 +123,34 @@ def detect_border_corners(image_bgr: np.ndarray) -> np.ndarray | None:
     vertical line segments specifically (via morphological
     opening -- erode then dilate with a wide/tall kernel, which wipes
     out anything that isn't a long straight line, like handwriting or
-    printed text), unions them into one mask, and takes the outer
-    boundary of that mask. Because every ruled line in the table
-    touches its neighbors, that mask forms one connected mesh whose
-    external contour is exactly the table's own outer border --
-    unaffected by text/handwriting elsewhere on the page, since none
-    of that survives the line-isolating step.
+    printed text), uses their combined shape only to get a rough
+    bounding box for the whole table, then -- within a narrow search
+    band around each of that box's 4 edges -- gathers every surviving
+    line pixel in the band and fits one robust line through it per
+    edge, finally intersecting adjacent pairs (top/left, top/right,
+    bottom/left, bottom/right) to get the actual 4 corners.
+
+    (Three more direct approaches were tried first and all rejected
+    after testing against this project's real scans. minAreaRect over
+    the combined mask's own contour overshot one corner at a time,
+    pulled by whichever single jagged mesh-notch pixel happened to
+    stick out furthest. approxPolyDP-on-convex-hull was worse,
+    occasionally locking onto a small ink-blob protrusion on an
+    otherwise-straight edge as one of only 4 allowed vertices instead
+    of the true corner -- both failure modes come from reducing one
+    noisy contour down to a handful of points, where a single outlier
+    pixel can dominate the result. Requiring each border line to
+    survive as its own single CONNECTED component (rather than
+    searching a band for any matching pixels) also failed: the outer
+    border, being crossed by every internal row/column divider along
+    its full length, turned out to fragment into many small
+    disconnected pieces at those crossings even though internal
+    dividers -- crossed far less -- stayed intact; requiring
+    connectivity meant only picking up a stray internal divider's
+    fragment instead of the true, fragmented border. Gathering every
+    band pixel regardless of which fragment it belongs to, and fitting
+    with a robust (Huber) distance metric rather than plain
+    least-squares, sidesteps both problems at once.)
 
     Args:
         image_bgr: a full invoice scan as a BGR image array (e.g. from
@@ -87,7 +168,7 @@ def detect_border_corners(image_bgr: np.ndarray) -> np.ndarray | None:
     # copes with real scans having uneven lighting/shadow across the
     # page. THRESH_BINARY_INV makes ink (dark on the original scan)
     # come out white/foreground in the binary image, which is what
-    # the morphology and contour steps below expect.
+    # the morphology and line-fitting steps below expect.
     binary = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 25, 15
     )
@@ -112,38 +193,58 @@ def detect_border_corners(image_bgr: np.ndarray) -> np.ndarray | None:
     horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
     vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
 
+    # Combine into one mask purely to get an approximate bounding box
+    # for the whole table -- every ruled line touches its neighbors,
+    # so this forms one connected mesh whose bounding box reliably
+    # brackets the true border (verified against real scans), even
+    # though extracting exact CORNERS from this mask directly proved
+    # unreliable (see the two rejected approaches in this function's
+    # docstring). It's only used here as a rough anchor for where to
+    # search for each of the 4 border lines individually, below.
     grid_mask = cv2.bitwise_or(horizontal_lines, vertical_lines)
-
-    # RETR_EXTERNAL only returns each connected shape's outermost
-    # boundary, ignoring the many internal holes the grid's individual
-    # cells form -- exactly what we want, since we only care about the
-    # mesh's overall outer perimeter.
     contours, _ = cv2.findContours(grid_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
-
     largest = max(contours, key=cv2.contourArea)
 
-    # A real table border should cover a large, deliberate fraction of
-    # the page -- a stray line fragment surviving the morphology step
-    # (e.g. from a ruled signature line) would produce a tiny contour
-    # that's obviously not the table. Rejecting it here means the
-    # caller reliably gets either "the table" or None, never noise.
     page_area = width * height
     if cv2.contourArea(largest) < 0.15 * page_area:
         return None
 
-    # minAreaRect finds the smallest rotated rectangle enclosing the
-    # contour -- appropriate here since a scanned page's table is
-    # never perfectly axis-aligned (slight rotation from how the page
-    # sat on the scanner bed), but it isn't a general skewed
-    # quadrilateral either (paper doesn't warp), so a rotated
-    # rectangle is a truer fit than a raw 4-point polygon approximation
-    # would be, and doesn't need a shape-tolerance parameter to tune.
-    rect = cv2.minAreaRect(largest)
-    box = cv2.boxPoints(rect)
+    approx_left, approx_top, box_w, box_h = cv2.boundingRect(largest)
+    approx_right = approx_left + box_w
+    approx_bottom = approx_top + box_h
 
-    return order_corners(box)
+    # Search bands around each approximate edge -- generous enough to
+    # comfortably contain the true border despite the page's own
+    # small rotation (observed up to roughly 1 degree on real scans,
+    # i.e. well under 200px of vertical/horizontal drift across the
+    # whole table), while staying far short of the gap to the next
+    # real content (the nearest unrelated printed line on this
+    # project's template, a signature underline, sits several hundred
+    # pixels further away still).
+    band_y = max(60, int(0.03 * height))
+    band_x = max(60, int(0.03 * width))
+
+    top_line = _fit_line_in_band(horizontal_lines, "horizontal", approx_top - band_y, approx_top + band_y)
+    bottom_line = _fit_line_in_band(horizontal_lines, "horizontal", approx_bottom - band_y, approx_bottom + band_y)
+    left_line = _fit_line_in_band(vertical_lines, "vertical", approx_left - band_x, approx_left + band_x)
+    right_line = _fit_line_in_band(vertical_lines, "vertical", approx_right - band_x, approx_right + band_x)
+
+    if None in (top_line, bottom_line, left_line, right_line):
+        return None
+
+    try:
+        top_left = _intersect_lines(*top_line, *left_line)
+        top_right = _intersect_lines(*top_line, *right_line)
+        bottom_left = _intersect_lines(*bottom_line, *left_line)
+        bottom_right = _intersect_lines(*bottom_line, *right_line)
+    except np.linalg.LinAlgError:
+        # A singular system means two "border" lines came out parallel
+        # to each other instead of perpendicular -- not a real table.
+        return None
+
+    return order_corners(np.array([top_left, top_right, bottom_right, bottom_left]))
 
 
 def corner_distances(corners: np.ndarray) -> tuple[float, float]:
