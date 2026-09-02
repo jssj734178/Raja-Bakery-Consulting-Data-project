@@ -12,6 +12,7 @@ Run with:  python extract_invoice.py path/to/new_scan.png
 
 import argparse
 import json
+import math
 import os
 
 import cv2
@@ -20,7 +21,7 @@ import torch
 from PIL import Image
 
 from alignment import detect_border_corners, proportion_to_pixel, validate_aspect_ratio
-from digit_reader import load_model, read_number
+from digit_reader import load_model, read_number, threshold_cell
 
 # 300 DPI full-page invoice scans routinely exceed Pillow's default
 # decompression-bomb pixel-count guard even though they're legitimate,
@@ -32,15 +33,80 @@ CALIBRATION_PATH = "template_calibration.json"
 PRODUCT_ROWS_PATH = "product_rows.json"
 CHECKPOINT_PATH = "checkpoints/digit_cnn_finetuned.pt"
 
-# Margins added around each calibrated cell box before cropping, as a
-# fraction of the box's own height/width. Vertical margin is generous
-# -- real invoice digits routinely sit a bit high or low relative to
-# their ruled row -- while horizontal margin is kept small, since
-# reaching sideways risks pulling in the NEIGHBORING Qty/Return
-# column's own digit as stray ink, corrupting both fields at once,
-# rather than just clipping a wide one in this field alone.
-VERTICAL_MARGIN_FRACTION = 0.25
-HORIZONTAL_MARGIN_FRACTION = 0.05
+# Each cell is cropped twice, with different margins, because reading
+# and reviewing want opposite things from the crop.
+#
+# The ANALYSIS crop is deliberately oversized -- a full cell height of
+# extra room vertically. That looks wrong at first glance (it pulls in
+# the rows above and below wholesale) but it is exactly what
+# digit_reader's ownership test needs: it decides which ink belongs to
+# this cell by asking what fraction of each blob lies inside the cell
+# box, and that fraction is only meaningful if the blob is present in
+# full. Crop tightly and a neighbouring row's digit arrives sliced off
+# at the crop edge, where the visible sliver can sit mostly inside
+# this cell and be claimed by it -- which is exactly how blank cells
+# used to read as digits. Horizontal margin is smaller: it only has to
+# contain a digit overflowing its column, and the Qty and Return
+# columns sit close enough together that reaching further mostly just
+# imports the neighbouring column's ink for the ownership test to
+# throw away again.
+ANALYSIS_VERTICAL_MARGIN_FRACTION = 1.0
+ANALYSIS_HORIZONTAL_MARGIN_FRACTION = 0.3
+
+# The REVIEW crop is the one saved to disk for a human to look at, so
+# it is kept tight -- the cell plus enough margin that a digit sitting
+# high or low in its row isn't clipped, and no more. A reviewer
+# confirming a value wants the field itself, not its neighbours.
+REVIEW_VERTICAL_MARGIN_FRACTION = 0.25
+REVIEW_HORIZONTAL_MARGIN_FRACTION = 0.05
+
+
+def _separate_overlapping_boxes(calibration: dict):
+    """
+    Nudge the calibrated cell boxes apart, in place, so that no two
+    of them overlap.
+
+    The cells on the printed form don't overlap -- they're divided by
+    a single ruled line -- but the boxes in template_calibration.json
+    were drawn by hand around them, and neighbouring boxes routinely
+    run a little into each other (in the shipped calibration, the
+    Return boxes for rows 1 and 2 share a band about 60px tall).
+
+    That slop is harmless for cropping, but not for digit_reader's
+    ownership test, which asks whether the majority of a blob's ink
+    lies inside the cell box: ink sitting in a shared band is
+    majority-owned by BOTH cells and gets read twice. The invoice
+    where a Return of "1" was written low enough to be counted for its
+    own row and the row beneath it is exactly that.
+
+    Splitting each overlap down the middle restores what the form
+    already guarantees -- that every point on the page belongs to at
+    most one cell -- so the ownership test can stay a purely local
+    decision per cell instead of needing to compare cells against each
+    other.
+
+    Args:
+        calibration: the parsed template_calibration.json. Its row
+            boxes are modified in place.
+    """
+    def split(low_box, low_index, high_box, high_index):
+        """Pull two boxes apart to meet at the midpoint of their overlap."""
+        if low_box[low_index] > high_box[high_index]:
+            midpoint = (low_box[low_index] + high_box[high_index]) / 2
+            low_box[low_index] = midpoint
+            high_box[high_index] = midpoint
+
+    rows = sorted(calibration["rows"], key=lambda r: r["quantity_box"][1])
+
+    for row in rows:
+        # Qty sits left of Return, so Qty's right edge meets Return's
+        # left edge.
+        split(row["quantity_box"], 2, row["return_box"], 0)
+
+    # Within each column, a row's bottom edge meets the next row's top.
+    for upper, lower in zip(rows, rows[1:]):
+        for box_key in ("quantity_box", "return_box"):
+            split(upper[box_key], 3, lower[box_key], 1)
 
 
 def load_calibration(calibration_path: str = CALIBRATION_PATH, product_rows_path: str = PRODUCT_ROWS_PATH):
@@ -49,29 +115,49 @@ def load_calibration(calibration_path: str = CALIBRATION_PATH, product_rows_path
 
     Returns:
         (calibration, product_names) -- calibration is the parsed
-        template_calibration.json; product_names maps row_index to
-        its product name string from product_rows.json.
+        template_calibration.json, with any overlap between adjacent
+        cell boxes resolved (see _separate_overlapping_boxes);
+        product_names maps row_index to its product name string from
+        product_rows.json.
     """
     with open(calibration_path) as f:
         calibration = json.load(f)
+    # Adjusted on load rather than rewritten into the file: the saved
+    # calibration stays exactly what the operator drew, and re-running
+    # calibrate_template.py never has to know about this.
+    _separate_overlapping_boxes(calibration)
     with open(product_rows_path) as f:
         product_rows = json.load(f)
     product_names = {row["row_index"]: row["product_name"] for row in product_rows["rows"]}
     return calibration, product_names
 
 
-def crop_cell(image_bgr: np.ndarray, box_proportions: list, corners: np.ndarray) -> np.ndarray:
+def crop_cell(
+    image_bgr: np.ndarray,
+    box_proportions: list,
+    corners: np.ndarray,
+    horizontal_margin: float,
+    vertical_margin: float,
+) -> tuple[np.ndarray, tuple]:
     """
-    Crop one calibrated cell (Qty or Return) out of a new scan, given
-    its saved proportion box and this scan's own detected border.
+    Crop one calibrated cell (Qty or Return) out of a new scan,
+    rotated upright, given its saved proportion box and this scan's
+    own detected border.
 
     Maps all 4 corners of the box individually through
     proportion_to_pixel (not just the 2 diagonal corners that are
-    stored) so the crop correctly follows this particular scan's own
-    rotation, then takes the axis-aligned bounding box of those 4
-    mapped points plus a margin -- simpler than cropping a rotated
-    quadrilateral directly, and the small rotations these scans
-    actually have don't lose meaningful cell area this way.
+    stored), then warps that quadrilateral to an axis-aligned crop
+    rather than taking its bounding box. The rotation matters for more
+    than tidiness: these scans sit around 1.4 degrees off square, and
+    digit_reader isolates the form's printed ruled lines with
+    axis-aligned morphological kernels, which cannot fit inside a line
+    that drifts ~26px across the width of a cell. Handing it an
+    already-upright crop is what lets that step work -- see the
+    LINE_KERNEL_CELL_FRACTION note there.
+
+    The angle comes from the box's own mapped top edge, so it tracks
+    whatever local rotation this scan has where this particular cell
+    sits, with no extra detection step and no full-page warp.
 
     Args:
         image_bgr: the full invoice scan.
@@ -80,35 +166,182 @@ def crop_cell(image_bgr: np.ndarray, box_proportions: list, corners: np.ndarray)
             as proportions of the border).
         corners: this scan's own detected border corners, from
             alignment.detect_border_corners().
+        horizontal_margin: extra width to include around the cell, as
+            a fraction of the cell's own width, split evenly between
+            the two sides.
+        vertical_margin: the same, for height.
 
     Returns:
-        The cropped cell region as a BGR image array.
+        (crop, cell_box) -- the upright BGR crop, and the cell's own
+        box within it as (x1, y1, x2, y2) in crop pixel coordinates,
+        i.e. the crop minus its margin. digit_reader needs that box to
+        tell this cell's ink from a neighbouring row's.
     """
     fx1, fy1, fx2, fy2 = box_proportions
-    corner_points = [
-        proportion_to_pixel(fx1, fy1, corners),
-        proportion_to_pixel(fx2, fy1, corners),
-        proportion_to_pixel(fx2, fy2, corners),
-        proportion_to_pixel(fx1, fy2, corners),
-    ]
-    xs = [p[0] for p in corner_points]
-    ys = [p[1] for p in corner_points]
-    x1, x2 = min(xs), max(xs)
-    y1, y2 = min(ys), max(ys)
+    top_left, top_right, bottom_right, bottom_left = (
+        np.array(proportion_to_pixel(fx, fy, corners), dtype=float)
+        for fx, fy in [(fx1, fy1), (fx2, fy1), (fx2, fy2), (fx1, fy2)]
+    )
 
+    center = (top_left + top_right + bottom_right + bottom_left) / 4.0
+    angle = math.degrees(
+        math.atan2(top_right[1] - top_left[1], top_right[0] - top_left[0])
+    )
+    # Average the two opposite edges: the mapped quadrilateral is only
+    # approximately a rectangle, so neither edge alone is definitive.
+    cell_width = (
+        np.linalg.norm(top_right - top_left) + np.linalg.norm(bottom_right - bottom_left)
+    ) / 2
+    cell_height = (
+        np.linalg.norm(bottom_left - top_left) + np.linalg.norm(bottom_right - top_right)
+    ) / 2
+
+    crop_width = int(round(cell_width * (1 + horizontal_margin)))
+    crop_height = int(round(cell_height * (1 + vertical_margin)))
+
+    # Rotate about the cell's centre, then shift that centre to the
+    # centre of the output. warpAffine only evaluates the output
+    # pixels it is asked for, so this stays cheap even though the
+    # source is a full 300 DPI page. BORDER_REPLICATE keeps a cell at
+    # the very edge of the scan from picking up a black margin that
+    # would threshold as a huge block of ink.
+    rotation = cv2.getRotationMatrix2D((float(center[0]), float(center[1])), angle, 1.0)
+    rotation[0, 2] += crop_width / 2 - center[0]
+    rotation[1, 2] += crop_height / 2 - center[1]
+    crop = cv2.warpAffine(
+        image_bgr,
+        rotation,
+        (crop_width, crop_height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+    cell_box = (
+        (crop_width - cell_width) / 2,
+        (crop_height - cell_height) / 2,
+        (crop_width + cell_width) / 2,
+        (crop_height + cell_height) / 2,
+    )
+    return crop, cell_box
+
+
+def _ruled_line_positions(binary: np.ndarray, axis: int, run_length: int) -> list:
+    """
+    Locate the form's printed ruled lines in a deskewed crop.
+
+    Args:
+        binary: thresholded crop, ink as foreground.
+        axis: 0 to find vertical lines (returning x positions), 1 to
+            find horizontal ones (returning y positions).
+        run_length: how long a straight run has to be to count as a
+            printed line rather than handwriting.
+
+    Returns:
+        The centre position of each detected line, in ascending order.
+        Adjacent columns/rows of the same line are collapsed into one
+        entry -- a printed line is several pixels thick, and what the
+        caller wants is one number per line.
+    """
+    kernel_size = (1, run_length) if axis == 0 else (run_length, 1)
+    lines = cv2.morphologyEx(
+        binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size)
+    )
+
+    # Count ink along each line's own direction, leaving one value per
+    # candidate position, then keep the positions where a line
+    # actually is. Half the run length is a deliberately forgiving
+    # cut: it takes a real line to get near it, but a line broken up
+    # where other rules cross it still clears it.
+    profile = lines.sum(axis=axis) / 255
+    present = profile > run_length / 2
+
+    positions = []
+    start = None
+    for index, is_line in enumerate(present):
+        if is_line and start is None:
+            start = index
+        elif not is_line and start is not None:
+            positions.append((start + index - 1) / 2)
+            start = None
+    if start is not None:
+        positions.append((start + len(present) - 1) / 2)
+    return positions
+
+
+def snap_cell_box(crop_bgr: np.ndarray, cell_box: tuple) -> tuple:
+    """
+    Move a calibrated cell box onto the ruled lines that actually
+    bound that cell on this particular scan.
+
+    The calibration records each cell as proportions of the table
+    border, which puts the box in the right cell on any scan but not
+    on exactly the right pixels: the proportion that lands on the
+    column divider for the reference scan lands some way past it on
+    another. That was not a small discrepancy in practice. On roughly
+    a third of the pages sampled, the Return box overran the divider
+    far enough to swallow the printed unit price beyond it, so the
+    "$4.00" in the next column was read as the row's return quantity
+    -- silently, and in nearly every row of the affected page.
+
+    Rather than trust the proportions to the pixel, take from them
+    only what they're reliable for -- WHICH cell this is -- and get
+    the cell's actual bounds from the scan itself, snapping each edge
+    to the nearest printed line beyond the box's centre. This is the
+    same principle the calibration already rests on, that a new scan's
+    own detected geometry beats anything remembered from the
+    reference scan, applied one level down from the table border to
+    the individual cell.
+
+    Args:
+        crop_bgr: the deskewed crop from crop_cell(), which must
+            extend past the cell far enough to contain the lines
+            bounding it.
+        cell_box: (x1, y1, x2, y2) of the calibrated box within that
+            crop.
+
+    Returns:
+        The snapped box, in the same form, never larger than the one
+        passed in. Any edge with no printed line inside it keeps its
+        calibrated position, so a faint or broken line degrades this
+        back to current behaviour for that one edge rather than moving
+        it somewhere wrong.
+    """
+    x1, y1, x2, y2 = cell_box
     width, height = x2 - x1, y2 - y1
-    x1 -= width * HORIZONTAL_MARGIN_FRACTION / 2
-    x2 += width * HORIZONTAL_MARGIN_FRACTION / 2
-    y1 -= height * VERTICAL_MARGIN_FRACTION / 2
-    y2 += height * VERTICAL_MARGIN_FRACTION / 2
+    binary = threshold_cell(crop_bgr, height)
 
-    # Clamp to the actual image bounds -- a margin near the table's
-    # outer edge could otherwise push the crop request outside the
-    # scan entirely.
-    img_h, img_w = image_bgr.shape[:2]
-    x1, y1 = max(0, int(x1)), max(0, int(y1))
-    x2, y2 = min(img_w, int(x2)), min(img_h, int(y2))
-    return image_bgr[y1:y2, x1:x2]
+    # A line only counts if it runs at least half the cell's own
+    # extent -- the same length test digit_reader uses to tell
+    # printed rules from handwriting.
+    verticals = _ruled_line_positions(binary, axis=0, run_length=int(height * 0.5))
+    horizontals = _ruled_line_positions(binary, axis=1, run_length=int(width * 0.5))
+
+    def snap(edge, centre, candidates, limit):
+        """Pull an edge in to the innermost printed line it has crossed."""
+        # Only lines strictly INSIDE the box are candidates, so this can
+        # shrink the box but never grow it. That asymmetry is the whole
+        # point: a box reaching past its divider is reading a
+        # neighbouring column and must be pulled back, whereas a box
+        # sitting slightly shy of its divider is harmless, and letting
+        # edges expand outward to find a line turned a correctly-read
+        # "50" into "501" by reaching far enough to pick up a stray
+        # mark. When in doubt, read less of the page, not more.
+        inside = [
+            p for p in candidates
+            if min(centre, edge) < p < max(centre, edge) and abs(p - edge) <= limit
+        ]
+        return min(inside, key=lambda p: abs(p - edge)) if inside else edge
+
+    # An edge may only move by a fraction of the cell, so a stray line
+    # elsewhere in the crop -- the next row's rule, the far side of a
+    # neighbouring column -- can never capture it.
+    centre_x, centre_y = (x1 + x2) / 2, (y1 + y2) / 2
+    return (
+        snap(x1, centre_x, verticals, width * 0.4),
+        snap(y1, centre_y, horizontals, height * 0.4),
+        snap(x2, centre_x, verticals, width * 0.4),
+        snap(y2, centre_y, horizontals, height * 0.4),
+    )
 
 
 def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
@@ -163,14 +396,32 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
         row_index = row["row_index"]
         product_name = product_names.get(row_index, "")
 
-        qty_crop = crop_cell(image, row["quantity_box"], corners)
-        return_crop = crop_cell(image, row["return_box"], corners)
+        results = {}
+        for field, box_key in (("qty", "quantity_box"), ("return", "return_box")):
+            analysis_crop, cell_box = crop_cell(
+                image,
+                row[box_key],
+                corners,
+                ANALYSIS_HORIZONTAL_MARGIN_FRACTION,
+                ANALYSIS_VERTICAL_MARGIN_FRACTION,
+            )
+            cell_box = snap_cell_box(analysis_crop, cell_box)
+            results[field] = read_number(analysis_crop, cell_box, model, device)
 
-        cv2.imwrite(os.path.join(crops_dir, f"row{row_index:02d}_qty.png"), qty_crop)
-        cv2.imwrite(os.path.join(crops_dir, f"row{row_index:02d}_return.png"), return_crop)
+            # Saved separately and tighter -- what a reviewer needs to
+            # see is not what the reader needs to measure against.
+            review_crop, _ = crop_cell(
+                image,
+                row[box_key],
+                corners,
+                REVIEW_HORIZONTAL_MARGIN_FRACTION,
+                REVIEW_VERTICAL_MARGIN_FRACTION,
+            )
+            cv2.imwrite(
+                os.path.join(crops_dir, f"row{row_index:02d}_{field}.png"), review_crop
+            )
 
-        qty_result = read_number(qty_crop, model, device)
-        return_result = read_number(return_crop, model, device)
+        qty_result, return_result = results["qty"], results["return"]
 
         rows_out.append(
             {

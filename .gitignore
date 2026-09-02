@@ -27,6 +27,12 @@ invoices/
 invoice_digits/
 *.pdf
 
+# Per-invoice extraction output: results.json plus a cropped image of
+# every Qty/Return cell. Regenerable from a scan with
+# extract_invoice.py, and it is the same real business data as the
+# scans it is cut from, so it is excluded for both reasons above.
+extractions/
+
 # OS-generated junk files
 .DS_Store
 Thumbs.db
