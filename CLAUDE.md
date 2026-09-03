@@ -18,11 +18,12 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `line_counts.py` | 122 | 59 | 47 | 16 |
 | `model.py` | 122 | 22 | 84 | 16 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
+| `review_screen.py` | 545 | 289 | 194 | 62 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **3521** | **1375** | **1718** | **428** |
+| **Total** | **4066** | **1664** | **1912** | **490** |
 
-*Last updated: 2026-09-01.*
+*Last updated: 2026-09-03.*
 
 ## What this is
 
@@ -49,7 +50,7 @@ The scripts form a sequential pipeline, each a standalone CLI entry point (`pyth
 
 ## Production inference pipeline (in progress)
 
-A second pipeline, separate from the training pipeline above, for applying the finished fine-tuned model to NEW invoices going forward — the system that automatically extracts quantities from a scanned invoice rather than the system that built the model in the first place. Design: fixed pre-printed invoice template, so product identity comes from row POSITION (not OCR); a one-time calibration records each row's Qty/Return cell positions as proportions of the table border, reused on every future scan via that scan's own freshly-detected border (no full geometric image warp needed); Return is subtracted from Qty per row; low-confidence/ambiguous reads are flagged for human review rather than guessed. Calibration is complete and verified (`template_calibration.json` + `product_rows.json`, both checked into git). Per-invoice extraction (`extract_invoice.py` + `digit_reader.py`) is built and working — the segmentation bug that previously made its output untrustworthy is fixed and verified against hand-read ground truth (see "Known issues" below for what was wrong and what residuals remain). A human review interface and an Odoo push are still to come — see "Next to build: the human review screen" below for the requirements gathered so far.
+A second pipeline, separate from the training pipeline above, for applying the finished fine-tuned model to NEW invoices going forward — the system that automatically extracts quantities from a scanned invoice rather than the system that built the model in the first place. Design: fixed pre-printed invoice template, so product identity comes from row POSITION (not OCR); a one-time calibration records each row's Qty/Return cell positions as proportions of the table border, reused on every future scan via that scan's own freshly-detected border (no full geometric image warp needed); Return is subtracted from Qty per row; low-confidence/ambiguous reads are flagged for human review rather than guessed. Calibration is complete and verified (`template_calibration.json` + `product_rows.json`, both checked into git). Per-invoice extraction (`extract_invoice.py` + `digit_reader.py`) is built and working — the segmentation bug that previously made its output untrustworthy is fixed and verified against hand-read ground truth (see "Known issues" below for what was wrong and what residuals remain). The human review screen (`review_screen.py`) is also built and working, up to a person approving an invoice locally — see "The human review screen: requirements and decisions" below. Only the Odoo push remains — see "Next to build: the Odoo push" below.
 
 
 ### Plain-language glossary
@@ -95,51 +96,58 @@ The code and the notes below use some standard image-processing words. In this p
    - **It straightens each box before cutting it out.** These scans sit about 1.4 degrees crooked. That sounds tiny, but across the width of one box a "horizontal" printed line drifts down by about 26 pixels, while the line itself is only about 7 pixels thick — so the line is nowhere near level, and the step that erases printed lines simply fails on a crooked picture. Straightening costs nothing extra, because the tilt can be worked out from the corners of the box we already calculated.
    - **Each box is cut out twice, at two different sizes.** The copy used for *reading* is deliberately too big, taking in a whole row's height above and below. That seems wrong, but step 4 above needs to see a neighbouring row's digit in full to judge that it belongs to that row and not this one — if it's cut off at the edge of the picture, the visible sliver can look like it belongs here, and that is exactly why blank boxes used to be read as numbers. The copy *saved for a person to look at* is kept tight and tidy.
    - **It nudges each box's edges inwards onto the printed lines it can actually see on this scan.** The saved calibration reliably says *which* box we want, but not its exact position on every scan. On about a third of pages tested, the Return box reached past the column divider and swallowed the printed price in the next column, so "$4.00" was being read as that row's return quantity — quietly, on nearly every row of the page. The nudge only ever makes a box smaller, never bigger: allowing it to grow outwards turned a correctly-read "50" into "501".
+5. **[review_screen.py](review_screen.py)** — the screen a person uses to check, correct, assign a customer to, and approve one invoice's extraction before anything goes to Odoo. Reads `results.json` and `crops/` from `extractions/<invoice_name>/` (both already produced by `extract_invoice.py`, above). Shows every row — not just flagged ones — with the product name, an editable box for its Qty and Return values, and a line quantity (Qty minus Return) that recalculates live as those are edited. A field the software flagged gets a pink background, a plain-language reason, and its crop image so the reason can be checked against the actual handwriting; an unflagged field skips the image (see "The human review screen" below for why) but stays just as editable. The customer picker at the top is one control doing both jobs the requirements called for: its dropdown offers the saved customer list, and it also accepts typing any name that isn't on it — and a typed name that does match one on the list (ignoring case/whitespace) is folded onto that customer's exact listed spelling rather than kept as separately-typed text. Approving an invoice writes `review.json` next to its `results.json` — the chosen customer, and every row's corrected value kept alongside what the software originally read, so a correction stays visible as a correction rather than overwriting the record of it. Deliberately does not talk to Odoo itself. Run with `python review_screen.py`, or `python review_screen.py "invoice folder name"` to open a specific invoice first.
 
+## The human review screen: requirements and decisions
 
-## Next to build: the human review screen
+[review_screen.py](review_screen.py) (above) is built and working, up to
+the point of a person approving an invoice locally. What it deliberately
+does not do yet is talk to Odoo — see "Next to build" below for that.
 
-Not started yet. This is the screen a person uses to check an invoice the
-software has read, correct anything wrong, and approve it before it goes
-into Odoo. Requirements captured so far:
+**Customer selection (requested 2026-09-02, list arrived 2026-09-02).**
+Both required ways of setting the customer are there: pick from the
+regular list, saved in [customers.json](customers.json) (39 customers,
+checked into git the same way `product_rows.json` is — plain business
+names, not scan data), or type a name that isn't on it, for a one-off
+customer who doesn't belong on the list.
 
-**Customer selection (requested 2026-09-02).** The screen must let the
-person say which customer the invoice belongs to. Two ways of doing that,
-both needed:
+**Typed-name matching (decided 2026-09-03).** A typed name that matches an
+existing customer — ignoring case and surrounding whitespace — is folded
+onto that customer's exact listed spelling, rather than kept as
+separately-typed text or merely suggested. This happens as soon as the
+customer field loses focus, so the correction is visible before
+approving, and is applied again (defensively) at Approve & Save. A typed
+name that doesn't match anything on the list is kept exactly as typed —
+that's the free-text option working as intended, for a genuine one-off
+customer.
 
-- **Pick from a list of customers.** This covers the regular customers and
-  should be the normal path — picking from a list avoids the spelling
-  variations and typos that come with typing a name every time, which
-  matters because the customer name is what ties the invoice to the right
-  record in Odoo. **The list of customers has not been supplied yet — it
-  is coming from Jagbir in a future session.** Until it arrives, do not
-  invent placeholder customer names that could be mistaken for real ones.
-- **Type a name instead.** Some invoices are for occasional one-off
-  customers who are not on the list and do not warrant being added to it.
-  The screen needs a free-text box for those, available alongside the list
-  rather than replacing it.
+**How much gets reviewed (decided 2026-09-02).** Every quantity and return
+field is shown and editable, whether or not it was flagged — not just the
+~39% of filled-in fields that raise a flag. Flagged-only review would be
+faster but would miss a confident misread: the model is roughly 94%
+accurate per digit, and when it is wrong it is often wrong confidently, so
+nothing flags it (see "What is still not perfect" below). A flagged field
+is shown with a pink background and the reason, but stays just as editable
+as every other field.
 
-Worth deciding when the list arrives: whether a typed name that turns out
-to match an existing customer should be quietly folded into that customer,
-offered as a suggestion, or left exactly as typed.
+**Crop images shown only for flagged fields (decided 2026-09-03).** Every
+field is still editable regardless of flag state (per the decision just
+above), but the handwriting photo itself is now only shown for a flagged
+field. With up to 24 rows on screen and most fields unflagged, showing a
+photo for all of them made the list too tall to scroll through
+comfortably. A flagged field's photo is what a reviewer actually needs
+open, to check the software's stated reason against the real handwriting;
+an unflagged field's photo wasn't earning the space it cost.
 
-**Reading the extraction.** The screen reads `extractions/<invoice_name>/`,
-which `extract_invoice.py` already produces: `results.json` holds every
-row's product name, quantity, return, computed line quantity, and any
-review flags, and `crops/` holds a picture of every Qty and Return box —
-saved for every field, not just the flagged ones, specifically so this
-screen can show a person the original handwriting for anything they want
-to check.
+## Next to build: the Odoo push
 
-**Open question: how much gets reviewed.** About 39% of filled-in fields
-currently raise a flag. Reviewing only the flagged ones is much faster, but
-it cannot catch a confident misread — the model is roughly 94% accurate per
-digit, and when it is wrong it is often wrong confidently, so nothing flags
-it (see "What is still not perfect" below). Reviewing every filled field
-catches those but is slower. This choice changes what the screen needs to
-be, so it is worth settling before building it.
-
-**After this comes the Odoo push**, which is still to be designed.
+Not started, and being built separately from the rest of this pipeline.
+`review_screen.py`'s "Approve & Save" writes
+`extractions/<invoice_name>/review.json` — the chosen customer plus every
+row's corrected quantity/return/line quantity, each alongside what the
+software originally read and whether that field had been flagged — which
+is the intended starting point for whatever pushes an approved invoice
+into Odoo.
 
 ## Earlier fix: one corner of the detected table border was in the wrong place (`alignment.py`)
 
