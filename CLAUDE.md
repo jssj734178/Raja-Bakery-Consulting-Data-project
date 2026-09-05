@@ -50,7 +50,7 @@ The scripts form a sequential pipeline, each a standalone CLI entry point (`pyth
 
 ## Production inference pipeline (in progress)
 
-A second pipeline, separate from the training pipeline above, for applying the finished fine-tuned model to NEW invoices going forward — the system that automatically extracts quantities from a scanned invoice rather than the system that built the model in the first place. Design: fixed pre-printed invoice template, so product identity comes from row POSITION (not OCR); a one-time calibration records each row's Qty/Return cell positions as proportions of the table border, reused on every future scan via that scan's own freshly-detected border (no full geometric image warp needed); Return is subtracted from Qty per row; low-confidence/ambiguous reads are flagged for human review rather than guessed. Calibration is complete and verified (`template_calibration.json` + `product_rows.json`, both checked into git). Per-invoice extraction (`extract_invoice.py` + `digit_reader.py`) is built and working — the segmentation bug that previously made its output untrustworthy is fixed and verified against hand-read ground truth (see "Known issues" below for what was wrong and what residuals remain). The human review screen (`review_screen.py`) is also built and working, up to a person approving an invoice locally — see "The human review screen: requirements and decisions" below. Only the Odoo push remains — see "Next to build: the Odoo push" below.
+A second pipeline, separate from the training pipeline above, for applying the finished fine-tuned model to NEW invoices going forward — the system that automatically extracts quantities from a scanned invoice rather than the system that built the model in the first place. Design: fixed pre-printed invoice template, so product identity comes from row POSITION (not OCR); a one-time calibration records each row's Qty/Return cell positions as proportions of the table border, reused on every future scan via that scan's own freshly-detected border (no full geometric image warp needed); Return is subtracted from Qty per row; low-confidence/ambiguous reads are flagged for human review rather than guessed. Calibration is complete and verified (`template_calibration.json` + `product_rows.json`, both checked into git). Per-invoice extraction (`extract_invoice.py` + `digit_reader.py`) is built and working — the segmentation bug that previously made its output untrustworthy is fixed and verified against hand-read ground truth (see "Known issues" below for what was wrong and what residuals remain). The human review screen (`review_screen.py`) is also built and working, up to a person approving an invoice locally — see "The human review screen: requirements and decisions" below. Only getting this into Odoo remains — see "Next to build: getting this into Odoo" below.
 
 
 ### Plain-language glossary
@@ -139,15 +139,90 @@ comfortably. A flagged field's photo is what a reviewer actually needs
 open, to check the software's stated reason against the real handwriting;
 an unflagged field's photo wasn't earning the space it cost.
 
-## Next to build: the Odoo push
+## Next to build: getting this into Odoo
 
-Not started, and being built separately from the rest of this pipeline.
-`review_screen.py`'s "Approve & Save" writes
+Not started yet. `review_screen.py`'s "Approve & Save" currently writes
 `extractions/<invoice_name>/review.json` — the chosen customer plus every
 row's corrected quantity/return/line quantity, each alongside what the
-software originally read and whether that field had been flagged — which
-is the intended starting point for whatever pushes an approved invoice
-into Odoo.
+software originally read and whether that field had been flagged. That
+file is the intended starting point for whatever pushes an approved
+invoice into Odoo, but which specific approach to build was still being
+decided — see below for where that landed (decided 2026-09-05).
+
+**Decision: build a custom Odoo Community Edition module, not a
+standalone web app (decided 2026-09-05).** Two other options were
+weighed first:
+
+- A desktop button added to `review_screen.py` (pick a PDF file, run it
+  through the pipeline automatically) is the fastest thing to build, but
+  only ever runs on the one Windows machine it's installed on — it can't
+  be reached from a phone or any other computer, and every uploaded PDF
+  and its extraction just accumulates as local files on that one
+  machine's hard drive, the same way the 96 scans in `invoices/` do
+  today, with no backup beyond whatever that machine's owner already has
+  in place.
+- A standalone web app (a small server plus a browser-based rewrite of
+  the whole review screen) would fix the "only one machine" problem, but
+  is pure extra work: it still leaves the Odoo push itself unbuilt
+  afterward, as a separate fourth project.
+- The Odoo module does both jobs in one build: Odoo already provides file
+  upload, a browser-based UI framework, login/access control, and a
+  central database, so this reuses that instead of building it from
+  scratch — and because it's built inside Odoo, "Approve" can create the
+  real Odoo record directly instead of producing a `review.json` for some
+  future separate script to consume. It also means the tool is reachable
+  by any device with a browser, phones included, unlike a desktop-only
+  build.
+
+**Approve, precisely (decided 2026-09-05):**
+
+- **No stock/inventory movement.** This business does not track
+  warehouse quantities in Odoo for these products, so approving an
+  invoice never needs to touch stock levels — only billing.
+- **Pricing comes from Odoo, not the paper.** The invoice form has a
+  printed price column, but it is not used — each invoice line is
+  created with no price set, so Odoo fills it in from whatever price
+  list already applies to that product and customer.
+- **Creates a draft invoice, not a finalized one.** Approve creates a
+  Customer Invoice (Odoo's `account.move`) in **draft** status, with one
+  line per product row (quantity = Qty minus Return, matched to an
+  existing Odoo product by name and an existing Odoo contact by
+  customer) — left as a draft so a person still gives it a final look
+  and posts/sends it from inside Odoo itself, rather than Approve being
+  the last checkpoint.
+
+**Project structure: keep this project as the shared engine; the Odoo
+module is a separate project (decided 2026-09-05).** This repository
+stays as the "engine" — `alignment.py`, `digit_reader.py`,
+`extract_invoice.py`, `model.py`, and the trained checkpoint — since a
+tkinter project and an Odoo module (which requires its own specific
+folder shape: a manifest file, XML views, etc.) don't share a structure.
+The Odoo module should be built to *reference* this project's code
+(installed as a dependency) rather than have its files copied in —
+copying would work initially, but a fix or model improvement made here
+later would then have to be manually re-applied inside the Odoo module
+too, and the two copies would quietly drift apart over time.
+
+**Also planned, not yet started:**
+
+- **A desktop "import PDF" button on `review_screen.py`.** Not the
+  long-term intake path (see above for why), but worth adding anyway as
+  a quick way to feed new scans through the pipeline locally without
+  typing commands, while the Odoo module is being built.
+- **Banking verified-correct crops as future training data.** When a
+  reviewer leaves a field unflagged and uncorrected, that's a
+  high-confidence signal the model's digit-by-digit read was right, so
+  those digit crops and the model's own labels could be saved into a
+  growing bank for retraining later — free labeled data, without anyone
+  hand-labeling anything new. The one prerequisite: `extract_invoice.py`
+  only saves each whole Qty/Return cell as one crop today, not each
+  individual digit inside it, so it would need to also save the
+  individual digit crops `digit_reader.py` already segments internally
+  before this can work. A *corrected* field is harder to bank this way —
+  if the software had mis-split the digits in the first place, the
+  corrected number can't always be cleanly matched back onto individual
+  digit images — so this would start with unflagged/uncorrected fields
+  only.
 
 ## Earlier fix: one corner of the detected table border was in the wrong place (`alignment.py`)
 
