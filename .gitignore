@@ -11,7 +11,20 @@ __pycache__/
 # size balloons, diffs are meaningless), so these are excluded by
 # default. Remove this line if you specifically want checkpoints
 # version-controlled instead.
-checkpoints/
+#
+# Written as checkpoints/* (not checkpoints/) so the exception below
+# can un-ignore one file inside it -- git never looks at negation
+# patterns for anything inside a directory that's excluded outright.
+checkpoints/*
+
+# Exception: the shipped fine-tuned checkpoint IS tracked, unlike the
+# rest of checkpoints/ above. It is small (~1.7MB) and, unlike the
+# MNIST-only checkpoint, it is NOT trivially regeneratable elsewhere --
+# finetune.py needs invoice_digits/, which is real business data that
+# is deliberately never pushed to git (see below). Without this file
+# committed, a fresh clone (e.g. a cloud coding session) has no way to
+# read an invoice at all.
+!checkpoints/digit_cnn_finetuned.pt
 
 # Public MNIST data -- large-ish, and trivially re-downloaded any time
 # via the curl command already documented for data.py.

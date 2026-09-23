@@ -179,10 +179,15 @@ weighed first:
 - **No stock/inventory movement.** This business does not track
   warehouse quantities in Odoo for these products, so approving an
   invoice never needs to touch stock levels — only billing.
-- **Pricing comes from Odoo, not the paper.** The invoice form has a
-  printed price column, but it is not used — each invoice line is
-  created with no price set, so Odoo fills it in from whatever price
-  list already applies to that product and customer.
+- **Pricing comes from the paper, not Odoo (reversed 2026-09-23 — see
+  "Pricing decision reversed" below).** Originally decided as: the
+  invoice form has a printed price column, but it is not used — each
+  invoice line is created with no price set, so Odoo fills it in from
+  whatever price list already applies to that product and customer.
+  That depended on a real Odoo price list existing, which has not
+  arrived and is not expected soon, so it was reversed in favor of
+  computing each line's actual price directly from that invoice's own
+  handwriting instead of waiting on one.
 - **Creates a draft invoice, not a finalized one.** Approve creates a
   Customer Invoice (Odoo's `account.move`) in **draft** status, with one
   line per product row (quantity = Qty minus Return, matched to an
@@ -223,6 +228,109 @@ too, and the two copies would quietly drift apart over time.
   corrected number can't always be cleanly matched back onto individual
   digit images — so this would start with unflagged/uncorrected fields
   only.
+
+## Pricing decision reversed: derive price from the invoice itself, not from Odoo (decided 2026-09-23)
+
+The no-price-list plan above assumed a real Odoo price list per customer
+would eventually exist. It has not arrived and does not look like it is
+coming soon, and shipping is more urgent than waiting for it. The form
+itself turns out to already have what's needed instead.
+
+**What the form actually has.** Every printed row on the invoice has a
+"Total Price" column — the rightmost column on the table, currently
+unused by any code, filled in by hand whenever that row has a quantity.
+`template_calibration.json` has never recorded a box for it (only
+`quantity_box` and `return_box` exist per row today).
+
+**The plan: read that column, and divide.** `unit price = Total Price ÷
+(Qty − Return)`. That computed price gets set explicitly on each draft
+invoice line in Odoo, instead of leaving the price blank for a price
+list to fill in.
+
+**Checked against 7 real scans (different invoices, customers, dates)
+by hand before committing to this, not just assumed:**
+
+- Every row that had a Qty filled in also had a Total Price filled in —
+  no gaps found.
+- On most rows, Total Price ÷ (Qty − Return) exactly matches the form's
+  own printed catalog price (e.g. 9 × $3.00 = $27.00, 20 × $3.50 =
+  $70.00) — so most of the time this just confirms the catalog price
+  rather than overriding it.
+- On bulk rows — Dempster Bread White/Brown especially, ordered 50-190
+  at a time — someone writes a discounted price in small handwriting
+  squeezed right next to the printed catalog price (e.g. $2.60 instead
+  of $3.00), and the Total Price confirms the discounted price, not the
+  printed one. This is the actual payoff: a real negotiated price no
+  static price list would otherwise capture.
+- Totals are reliably written with an actual decimal point ("130.0",
+  "231.90", "265.20") rather than an ambiguous mix of formats — good
+  news for teaching the digit reader to find it.
+- Deliberately **not** attempting to read that small squeezed-in
+  discount number directly — it overlaps printed text in a tiny space,
+  a harder read than anything the pipeline does today. Reading the
+  clean Total Price box and dividing gets the same answer from an
+  easier target.
+- Total Price is the rightmost column with nothing after it, so unlike
+  the Return-into-Unit-Price problem described below, its box has
+  nothing to spill into except the table's own edge.
+
+**What this adds to the pipeline (not yet built):** a `total_price` box
+per row in `template_calibration.json`; decimal-point handling in
+`digit_reader.py` (new — nothing today needs to find a decimal point);
+`total_price` and a derived `unit_price` in `results.json`; sanity
+flags (Qty/Return present with no Total or vice versa; a derived price
+far from the row's printed catalog price, allowing normal room for a
+bulk discount); and matching editable fields in `review_screen.py`,
+using its existing per-field pattern (see `_build_field`).
+
+## The Odoo server this will actually run on (checked 2026-09-23)
+
+Found by checking the machine directly rather than asking Jagbir to
+look, since it turned out to be reachable from here (WSL on the same
+Windows machine):
+
+- **Odoo 19 Community Edition**, official `odoo:19.0` Docker image, not
+  18 as first assumed — running via `docker-compose` in
+  `~/newcompany-odoo` inside the "Ubuntu" WSL distro, alongside
+  `postgres:15`. Custom modules mount at `/mnt/extra-addons` (already
+  wired into `addons_path` in `config/odoo.conf`).
+- **Python 3.12.3** inside that container, Ubuntu 24.04, x86_64.
+  Torch, OpenCV, numpy, and PyMuPDF are all missing from it — only
+  Pillow is present — so a custom Docker image (this project's
+  dependencies added on top of `odoo:19.0`) is needed, not the stock
+  image.
+- **One page takes about 73 seconds to read** (timed directly:
+  `extract_invoice.py` on one full-resolution scan, CPU-only). Odoo's
+  own web requests time out around 2 minutes, and a 24-page invoice PDF
+  would take roughly 30 minutes end to end — reading has to happen in
+  the background (a cron job or queue), never inline in the upload
+  request. Worth profiling later: the scans are roughly 85 megapixels,
+  and there may be an easy speed-up available.
+- **Final deployment target is a Mac** (onsite), chip unknown (Apple
+  silicon vs. Intel) as of this writing — the Docker build needs to
+  work on both until that's confirmed, and it isn't yet confirmed the
+  official Odoo image even ships an Apple-silicon build.
+- The test server's admin and database passwords are still whatever
+  ships as the stock `odoo:19.0` image's out-of-the-box default —
+  fine for local testing, but must be changed to real secrets before
+  anything real goes on this server.
+- **Decided:** the Odoo module becomes its own project, `bakery_odoo`,
+  containing a Dockerfile (`odoo:19.0` plus this project's
+  dependencies), a `docker-compose.yml`, and the module itself — this
+  repository (`bakery_ml`) gets installed into that image as a package
+  rather than copied in, per the shared-engine decision above. This
+  repo may need light packaging changes (e.g. a `pyproject.toml`) to be
+  installable that way, since it's currently loose top-level scripts
+  that import each other directly.
+
+**Status as of 2026-09-23: not yet built.** The plan above (Total Price
+column, then the Odoo module itself) was handed to a separate cloud
+Claude Code session to build out, since local diagnostics were judged
+sufficient to proceed. Check `bakery_odoo`'s own repo/history for what
+actually got built versus what remained undone — that session was
+instructed to record its own decisions and to say plainly (both there
+and in its final summary) what it could verify for real (e.g. against
+Docker) versus what it only wrote without being able to test.
 
 ## Earlier fix: one corner of the detected table border was in the wrong place (`alignment.py`)
 
