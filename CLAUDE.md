@@ -355,6 +355,49 @@ server this will actually run on" above).
 Where one is needed, it should be given in the chat or put in a local
 settings file that git ignores.
 
+**Plan for the next session (set by Jagbir 2026-09-24):** Jagbir will
+answer all the questions below at the start of the next session. Before
+that, **discuss the paper invoice number first** (item 0 just below).
+
+### 0. FIRST ITEM NEXT SESSION: using the paper invoice number in Odoo
+
+Each paper invoice has its own number printed in the top right corner
+(e.g. "Invoice: 21157"). Jagbir wants to capture it and either:
+
+- **(a) attach it to the Odoo invoice as a label** — e.g. Odoo's
+  built-in reference field on the invoice, or a tag — so the Odoo
+  invoice can be searched by the paper number and matched back to the
+  paper copy; or
+- **(b) use it as the Odoo invoice's own number,** instead of Odoo's
+  usual numbering (like "INV/2026/00001").
+
+Things to weigh up in that discussion:
+
+- **(a) is simple and low-risk.** It's just an extra piece of
+  information on the invoice. Odoo keeps its own numbering, which its
+  accounting features expect.
+- **(b) is possible but touchier.** Odoo expects its invoice numbers
+  to be unique and to go up in order within each journal, and warns
+  about gaps or numbers out of order. Paper numbers may not come in
+  order: several invoice books could be in use at once, or invoices
+  could be scanned out of order. And one misread number could clash
+  with a real one. Worth confirming with whoever does the bakery's
+  accounting before choosing it.
+- **Either way, it gives a free duplicate check:** if an invoice with
+  the same paper number has already been approved, warn before
+  creating a second one. That stops the same invoice being entered
+  twice.
+- **Reading the number:** it's printed type, not handwriting. The digit
+  model was trained on handwriting, so how well it reads printed digits
+  hasn't been tested. It would need a new box added to the calibration
+  for the number's position, and it must be measured before being
+  trusted. The review screen should always show the number, with a
+  picture of it, for the reviewer to confirm or type in, the same as
+  the other fields.
+- Questions for Jagbir: which option, (a) or (b)? Is the number always
+  printed in the same place on every invoice book? Are the numbers
+  unique across all books in use?
+
 ### Needed before starting (the build stalls without these)
 
 - [ ] **1. Are the 24 products already set up in Odoo?** If yes: are
@@ -404,12 +447,9 @@ settings file that git ignores.
 
 ### The paper invoice's other details
 
-- [ ] **12. Should the Odoo invoice carry the paper invoice's number**
-  (e.g. "Invoice: 21157", printed at the top) **and its handwritten
-  date?** If so, should the reviewer type them in, or should the
-  software try to read them? Reading them is harder: the number is
-  printed type, which the model wasn't trained on. If not, Odoo uses
-  its own numbering and today's date.
+- [ ] **12. The paper invoice's number is covered by item 0 above.**
+  Separately: should the Odoo invoice use the paper invoice's
+  handwritten date, or the date it's approved?
 - [ ] **13. The "Paid / NOT PAID" box:** should Odoo record anything
   from it, or ignore it? The current plan ignores it, since invoices
   are left as drafts for a person to finish in Odoo.
