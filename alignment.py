@@ -12,6 +12,8 @@ that's calibrate_template.py's job (recording proportions) and
 extract_invoice.py's job (consuming them), both built on top of this.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import cv2
 import numpy as np
 
@@ -85,13 +87,22 @@ def _fit_line_in_band(mask: np.ndarray, axis: str, band_low: float, band_high: f
         direction vector, both as length-2 float arrays -- or None if
         no foreground pixels fall inside the band at all.
     """
-    ys, xs = np.nonzero(mask)
-    coords = ys if axis == "horizontal" else xs
-    in_band = (coords >= band_low) & (coords <= band_high)
-    if not np.any(in_band):
+    # Search only the band's own strip of the mask, not the whole page
+    # -- scanning a full 85-megapixel page for every edge cost ~1s each.
+    # Points come out in the same order either way, so the fit is
+    # unchanged.
+    low = max(0, int(np.ceil(band_low)))
+    high = int(np.floor(band_high)) + 1
+    if axis == "horizontal":
+        ys, xs = np.nonzero(mask[low:high, :])
+        ys = ys + low
+    else:
+        ys, xs = np.nonzero(mask[:, low:high])
+        xs = xs + low
+    if len(xs) == 0:
         return None
 
-    points = np.column_stack([xs[in_band], ys[in_band]]).astype(np.float32)
+    points = np.column_stack([xs, ys]).astype(np.float32)
     vx, vy, x0, y0 = cv2.fitLine(points, cv2.DIST_HUBER, 0, 0.01, 0.01).flatten()
     return np.array([x0, y0]), np.array([vx, vy])
 
@@ -226,10 +237,18 @@ def detect_border_corners(image_bgr: np.ndarray) -> np.ndarray | None:
     band_y = max(60, int(0.03 * height))
     band_x = max(60, int(0.03 * width))
 
-    top_line = _fit_line_in_band(horizontal_lines, "horizontal", approx_top - band_y, approx_top + band_y)
-    bottom_line = _fit_line_in_band(horizontal_lines, "horizontal", approx_bottom - band_y, approx_bottom + band_y)
-    left_line = _fit_line_in_band(vertical_lines, "vertical", approx_left - band_x, approx_left + band_x)
-    right_line = _fit_line_in_band(vertical_lines, "vertical", approx_right - band_x, approx_right + band_x)
+    # The four edges are fitted at the same time on separate cores --
+    # each fit is independent and takes about half a second on its own.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        top_line, bottom_line, left_line, right_line = pool.map(
+            lambda args: _fit_line_in_band(*args),
+            [
+                (horizontal_lines, "horizontal", approx_top - band_y, approx_top + band_y),
+                (horizontal_lines, "horizontal", approx_bottom - band_y, approx_bottom + band_y),
+                (vertical_lines, "vertical", approx_left - band_x, approx_left + band_x),
+                (vertical_lines, "vertical", approx_right - band_x, approx_right + band_x),
+            ],
+        )
 
     if None in (top_line, bottom_line, left_line, right_line):
         return None

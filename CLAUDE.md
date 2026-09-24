@@ -8,22 +8,22 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 
 | File | Total lines | Code lines | Comment/docstring lines | Blank lines |
 |---|---|---|---|---|
-| `alignment.py` | 448 | 119 | 284 | 45 |
+| `alignment.py` | 467 | 131 | 290 | 46 |
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 630 | 182 | 394 | 54 |
-| `extract_invoice.py` | 497 | 211 | 233 | 53 |
+| `digit_reader.py` | 677 | 188 | 430 | 59 |
+| `extract_invoice.py` | 558 | 242 | 260 | 56 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
 | `model.py` | 122 | 22 | 84 | 16 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 545 | 289 | 194 | 62 |
+| `review_screen.py` | 546 | 290 | 194 | 62 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **4066** | **1664** | **1912** | **490** |
+| **Total** | **4194** | **1714** | **1981** | **499** |
 
-*Last updated: 2026-09-03.*
+*Last updated: 2026-09-24.*
 
 ## What this is
 
@@ -89,7 +89,7 @@ The code and the notes below use some standard image-processing words. In this p
    Finally it decides whether the answer can be trusted, using several separate checks that deliberately overlap, so a problem missed by one is usually caught by another: more than 3 digits found (real quantities on this form aren't bigger than that); a piece of ink far wider than it is tall (usually two digits touching and being read as one); a leftover stroke (usually a digit written in disconnected pieces); or the model itself not being confident about a digit (which also catches scribbles and crossings-out that aren't digits at all).
 
    A flagged field still gets the best answer the software could manage rather than being left empty. The flag means "a person should look at this before trusting it", not "nothing could be read".
-4. **[extract_invoice.py](extract_invoice.py)** — runs one whole invoice from start to finish: find the table's outer border on the new scan, check the border is a sensible shape (if not, the whole invoice is set aside for manual handling), then for every row cut out the Qty box and the Return box, read each one, and subtract Return from Qty. It writes `results.json` plus a picture of every single box — flagged or not — into `extractions/<invoice_name>/`, because the human review screen will need to show a picture of any field a person wants to check. Run with `python extract_invoice.py path/to/scan.png`.
+4. **[extract_invoice.py](extract_invoice.py)** — runs one whole invoice from start to finish: find the table's outer border on the new scan, check the border is a sensible shape (if not, the whole invoice is set aside for manual handling), then for every row cut out the Qty box and the Return box, read each one, and subtract Return from Qty. It writes `results.json` plus a picture of every single box — flagged or not — into `extractions/<invoice_name>/`, because the human review screen will need to show a picture of any field a person wants to check. Run with `python extract_invoice.py path/to/scan.png`, or give it several scans at once, e.g. `python extract_invoice.py invoices/*.png`. A batch is much faster than running it once per scan, because the ~20-second startup is only paid once (see "Speed-up" below).
 
    Three things this file does are worth explaining, because they look odd until you know why:
 
@@ -247,6 +247,17 @@ unused by any code, filled in by hand whenever that row has a quantity.
 invoice line in Odoo, instead of leaving the price blank for a price
 list to fill in.
 
+**What this is for (confirmed by Jagbir 2026-09-24).** The point is to
+capture, on the spot, any discount or price change given to that
+particular customer on that particular invoice — and that handwritten
+price, not the printed catalog price, is the one that must appear on the
+Odoo invoice line.
+
+**The price applies to that one invoice only (decided 2026-09-24).** It
+is not saved as that customer's standing price in Odoo. Jagbir doesn't
+know yet whether a customer's discount stays the same from one invoice
+to the next, so this stays per-invoice until that's known.
+
 **Checked against 7 real scans (different invoices, customers, dates)
 by hand before committing to this, not just assumed:**
 
@@ -299,13 +310,13 @@ Windows machine):
   Pillow is present — so a custom Docker image (this project's
   dependencies added on top of `odoo:19.0`) is needed, not the stock
   image.
-- **One page takes about 73 seconds to read** (timed directly:
-  `extract_invoice.py` on one full-resolution scan, CPU-only). Odoo's
-  own web requests time out around 2 minutes, and a 24-page invoice PDF
-  would take roughly 30 minutes end to end — reading has to happen in
-  the background (a cron job or queue), never inline in the upload
-  request. Worth profiling later: the scans are roughly 85 megapixels,
-  and there may be an easy speed-up available.
+- **One page took about 73 seconds to read** when first timed inside
+  this container (CPU-only). Since sped up — see "Speed-up (2026-09-24)"
+  below: on the Windows machine a page now takes about 3 seconds once
+  the software is loaded. It hasn't been re-timed inside the Docker
+  container yet. Reading should still happen in the background (a cron
+  job or queue) rather than inside the upload request, so a large PDF
+  can never hit Odoo's roughly 2-minute web request timeout.
 - **Final deployment target is a Mac** (onsite), chip unknown (Apple
   silicon vs. Intel) as of this writing — the Docker build needs to
   work on both until that's confirmed, and it isn't yet confirmed the
@@ -323,14 +334,80 @@ Windows machine):
   installable that way, since it's currently loose top-level scripts
   that import each other directly.
 
-**Status as of 2026-09-23: not yet built.** The plan above (Total Price
-column, then the Odoo module itself) was handed to a separate cloud
-Claude Code session to build out, since local diagnostics were judged
-sufficient to proceed. Check `bakery_odoo`'s own repo/history for what
-actually got built versus what remained undone — that session was
-instructed to record its own decisions and to say plainly (both there
-and in its final summary) what it could verify for real (e.g. against
-Docker) versus what it only wrote without being able to test.
+**Status as of 2026-09-24: not yet built.** The plan above (Total Price
+column, then the Odoo module itself) was going to be handed to a
+separate cloud Claude Code session, but that session never ran. Nothing
+from it exists — no `bakery_odoo` project, no Total Price code. Both
+still need to be built from scratch here.
+
+## Speed-up: reading a page went from ~11 seconds to ~3 (2026-09-24)
+
+**The result.** On this Windows machine (12 processor cores), reading
+one invoice page went from an average of **10.8 seconds to 2.9
+seconds** once the software is loaded, measured on the same 24 real
+pages covering all four invoice PDFs. **The answers did not change at
+all.** Every one of the 1,176 output files (24 `results.json` files
+plus 1,152 box pictures) was compared byte for byte against the old
+code's output, and all were identical. So nothing about accuracy or
+flagging needs re-checking because of this.
+
+**What changed, in plain terms:**
+
+1. **Checking which box each piece of ink belongs to**
+   (`_owned_ink` in `digit_reader.py`). To decide whether a piece of
+   ink belongs to this box or the row above or below, the old code
+   looked at each piece separately, and each time it re-scanned the
+   whole picture from the start. A box with 30 pieces meant 30 full
+   scans. It now counts all the pieces in one scan. This was the single
+   biggest waste, about 7 seconds per page.
+2. **Finding the table border** (`_fit_line_in_band` in
+   `alignment.py`). To find each of the table's four outer edges, the
+   old code searched the entire 85-megapixel page for printed-line
+   pixels, then threw away everything outside a narrow strip near that
+   edge. It now searches only that strip. The four edges are also
+   worked out at the same time instead of one after another. This saved
+   about 4.5 seconds per page.
+3. **Reading all 48 boxes at the same time** (`extract_invoice.py`).
+   The image work for each box (cutting it out, cleaning it up, finding
+   the separate digits) used to happen one box at a time, using one of
+   the 12 cores. It now runs across all cores at once. The model's
+   actual reading of the digits still happens one box at a time, in the
+   same order as before. That keeps the results from depending on
+   which box happens to finish first. To make this possible,
+   `digit_reader.read_number()` was split in two:
+   `segment_digit_blobs()` does the image work and the new
+   `classify_blobs()` does the model reading and the flag checks.
+   `read_number()` still exists and does both, for reading a single
+   box.
+4. **Several scans in one run.** Just starting the program (loading
+   PyTorch and the model) takes about 20 seconds on this machine, which
+   is now much longer than reading a page. `extract_invoice.py` now
+   accepts many scans at once (`python extract_invoice.py
+   invoices/*.png`), so that startup cost is paid once per batch
+   instead of once per page. The Odoo version won't have this problem
+   at all, since it will be a program that stays running. Note that
+   `--output-dir` now means the parent folder that each scan's own
+   results folder goes in, not the results folder itself.
+
+**What 10 invoices take now:** about 20 seconds to start, plus about 3
+seconds per page, so roughly 50 seconds in total, instead of 12
+minutes or more.
+
+**What's left, and why it was left alone.** Of the remaining ~3
+seconds, about 1.5 is simply opening the scan: the PNG file has to be
+decompressed into 85 million pixels, and OpenCV's loader turned out to
+be no faster than the current one. About 1.1 is the border search. Both
+could be made faster only by working on a shrunken copy of the page,
+which would change the answers slightly (the border's corners would
+land a pixel or two differently). That wasn't worth it, because the
+border's accuracy is what everything else is measured from (see the
+next section). One idea for later, in the Odoo version: render each PDF
+page straight into memory instead of saving it as a PNG and reading it
+back, which would skip most of that 1.5 seconds.
+
+**Not yet re-timed on the Docker/Odoo test server.** The original
+73-second figure came from there, and the speed there depends on how
+many cores Docker is allowed to use.
 
 ## Earlier fix: one corner of the detected table border was in the wrong place (`alignment.py`)
 
@@ -378,6 +455,137 @@ One subtlety in that last part is worth recording. Ink is assigned to a box a wh
 **Two more problems found while checking the fix, also fixed.** The boxes in the saved calibration were drawn by hand and overlap each other slightly, so writing that landed in the shared strip was counted twice, once for each row. And the saved calibration reliably identifies *which* box is wanted but not its exact pixels on every scan, so on about a third of pages the Return box reached past the column divider and read the printed price in the next column as a return quantity.
 
 **How it was checked.** Against three real scans from three different invoices, with the correct answers read off the page by eye first, deliberately including the faintest and hardest one. On the faint page every value checked now comes out right except one, where the model read a "9" as a "4". Before the fix, most of that page's second digits were being dropped entirely. Across a 24-page sample, the Return column had been reporting writing in 216 of 576 boxes — implausible on a form where returns are much rarer than orders — and now reports 112, while the Quantity column stayed steady at 169. In other words the fix removed wrong answers rather than just producing fewer answers. About 39% of filled-in fields raise a review flag.
+
+### Fixed (2026-09-24): the Return box was still reading the printed price next to it
+
+**What you would have seen.** On pages from all four invoice PDFs, the
+Return column was full of numbers like 831, 800, 8000 and 80000, when
+the box on the paper was actually empty. The software was reading the
+printed price in the next column: "$4.2…" came out as "831", "$3.00" as
+"800". Across all 96 sample pages, 182 rows came out with more returned
+than ordered, which is almost always this misread, and about 90 of those
+had no review flag. They would have gone into Odoo as negative
+quantities. The same fault was also quietly cutting the first digit off
+Qty values: "100" read as 0, "63" as 3, "36" as 6, "130" as 30.
+
+**Why it happened.** The step that nudges each box onto the printed
+lines (see "It nudges each box's edges inwards" above) has to recognise
+a column divider. It was accepting any straight up-and-down stroke at
+least half a box tall. But the printed "$" and "4" in the Unit Price
+column are that tall, and so is a handwritten "1". So the Return box's
+right edge would stop on the "$" or the "4", in the middle of the price,
+instead of on the real divider just before it, and the price then
+counted as being inside the Return box. On the Qty side, the left edge
+would stop on the stroke of a handwritten "1", cutting that digit and
+everything left of it out of the box.
+
+**What was changed:**
+
+1. **A column divider now has to be longer than a whole box is tall**
+   (`DIVIDER_MIN_LENGTH_CELL_FRACTION` in `extract_invoice.py`). A real
+   divider runs unbroken through the rows above and below too, which the
+   picture used for reading includes. No printed character or
+   handwritten digit is that long. This alone fixed nearly all of the
+   price misreads and the cut-off Qty digits.
+2. **A new review flag: more returned than ordered**
+   (`return_exceeds_quantity`, added in `extract_invoice.py`, with a
+   plain-language explanation on the review screen). A safety net,
+   whatever the cause: any row whose Return is bigger than its Qty now
+   gets flagged.
+3. **A mark that sits alone in a box and is under half the box's height
+   is no longer read as a digit** (`MIN_LONE_DIGIT_HEIGHT_FRACTION` in
+   `digit_reader.py`). Fix 1 made boxes tighter, and a side effect showed
+   up: a speck of paper texture that used to be too small compared to the
+   old, oversized box now counted as digit-sized in the correctly-sized
+   one, so some empty Return boxes read "3" or "2". A digit written on
+   its own is full height, so a short mark alone in a box is treated like
+   the other leftover strokes: left out of the number, and flagged if
+   it's pen-stroke-sized. The half-height trailing zeros one writer uses
+   aren't affected, because they always sit next to a full-size digit.
+
+**How it was checked.** Every page in `invoices/` (96 pages, all four
+PDFs) was read before and after, and every value that changed was looked
+at against its box picture by eye, about 80 in all, rather than trusting
+the totals:
+
+| Across all 96 pages | Before | After |
+|---|---|---|
+| Return values of 80 or more (prices read as returns) | 137 | 6 |
+| Rows with more returned than ordered | 182 | 28, **all now flagged** |
+| Fields flagged for a person to check | 416 | 256 |
+
+Of the Qty and Return values that changed and weren't simply a price
+turning back into a blank, the new reading was right in the large
+majority, and the old reading in almost none. Both the extra digits
+recovered ("100", "63", "130") and the blanks restored were confirmed
+against the pictures. The few new readings that are still wrong are
+mostly ones that were already wrong a different way (a tick mark next
+to a "24" read as extra digits, for example), and are flagged.
+
+### Accuracy, measured against correct answers (2026-09-24)
+
+The first real accuracy measurement of the whole reading process, not
+just the digit model. 8 pages were picked at random, 2 from each
+invoice PDF: 384 boxes. Every box was read by eye from its picture
+*before* looking at what the software said, so the software's answer
+couldn't sway the reading. 10 boxes whose handwriting is genuinely
+ambiguous (a "4" that could be a "9", a crossed-out number) were left
+out, leaving 374 scored.
+
+| | Before the 2026-09-24 fix | After |
+|---|---|---|
+| All boxes read correctly | 88.5% | **95.5%** |
+| Boxes with something written in them, read correctly | 75.4% (52 of 69) | **79.7%** (55 of 69) |
+| Empty boxes correctly read as empty | 279 of 305 | **302 of 305** |
+| Wrong readings | 43 | **17** |
+| ...of which flagged for review | 29 | 4 |
+| ...of which **not** flagged (would reach Odoo unless the reviewer spots it) | 14 | **13** |
+
+(The "before" column already includes the new "more returned than
+ordered" flag, so the real number of unflagged mistakes before the fix
+was higher than 14.)
+
+**In plain terms:** empty boxes are now almost always right. Of the
+boxes that actually have a number written in them, about 4 in 5 are
+read correctly. On an average page with about 9 filled-in boxes, that's
+roughly 2 wrong, and most of those won't be flagged. That's why every
+field stays on the review screen, not just the flagged ones.
+
+**What the 13 unflagged mistakes are:**
+
+- **The model misreading a digit (9 of the 13).** Mostly "9" read as "4"
+  (5 times: this handwriting's 9s have an open top that looks like a 4),
+  and "7" read as "1" ("27" read as "21", 3 times), plus "48" read as
+  "46". The model was 92-100% sure of every one of these, the same as
+  for its correct answers, so no confidence cut-off can catch them. The
+  fix is improving the model: retraining it on more of these writers'
+  own 9s and 7s, which is exactly what the planned saving of reviewed
+  digit pictures would provide (see "Banking verified-correct crops"
+  above).
+- **An extra digit picked up from nearby ink (2).** "20" read as "220",
+  "12" as "120".
+- **A stray stroke in an empty box read as "1" (2).**
+
+The by-eye readings (the correct answers) and the scoring script were
+kept only in that session's scratch folder, not in this repository,
+since they are real business data. Redoing this measurement means
+reading the pages again.
+
+### Open problem: one phone-photo page has its table border found in the wrong place
+
+Found while checking the fix above. `NEW RAJA BAKERY LTD. (1)_page006`
+is a phone photo, not a flat scan, so the table is tilted and
+keystoned (narrower at one end). On that page the table-border finder
+put the right-hand edge on the edge of the paper instead of the table's
+own right border. Every box on the page is therefore shifted: about
+half a row too high and too far right. Its misreads happen to be
+flagged, but that's luck, not design. The shape check
+(`validate_aspect_ratio`) can't catch it: this page's border is 5% off
+the normal shape, but correctly-read pages range almost as far (up to
+5.5%). It's the only page out of 96 where this was seen. It needs a
+different kind of check, for example confirming that the table's
+printed row lines really do end at the detected right edge. Not fixed
+yet.
 
 **What is still not perfect.** None of these are silent except the last one:
 

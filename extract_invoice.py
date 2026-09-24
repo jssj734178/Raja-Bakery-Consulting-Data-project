@@ -7,13 +7,16 @@ writes out the resulting (product, quantity) pairs plus a per-field
 confidence/flag status -- everything the (not yet built) human review
 step will need to confirm or correct before anything reaches Odoo.
 
-Run with:  python extract_invoice.py path/to/new_scan.png
+Run with:  python extract_invoice.py path/to/new_scan.png [more_scans.png ...]
+(e.g. python extract_invoice.py invoices/*.png for a whole batch).
 """
 
 import argparse
+import glob
 import json
 import math
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -21,7 +24,7 @@ import torch
 from PIL import Image
 
 from alignment import detect_border_corners, proportion_to_pixel, validate_aspect_ratio
-from digit_reader import load_model, read_number, threshold_cell
+from digit_reader import classify_blobs, load_model, segment_digit_blobs, threshold_cell
 
 # 300 DPI full-page invoice scans routinely exceed Pillow's default
 # decompression-bomb pixel-count guard even though they're legitimate,
@@ -59,6 +62,12 @@ ANALYSIS_HORIZONTAL_MARGIN_FRACTION = 0.3
 # confirming a value wants the field itself, not its neighbours.
 REVIEW_VERTICAL_MARGIN_FRACTION = 0.25
 REVIEW_HORIZONTAL_MARGIN_FRACTION = 0.05
+
+# How long a vertical stroke must be, as a multiple of the cell's
+# height, to count as a column divider in snap_cell_box(). Must stay
+# below 1 + ANALYSIS_VERTICAL_MARGIN_FRACTION (the analysis crop's
+# full height), or no divider could ever qualify.
+DIVIDER_MIN_LENGTH_CELL_FRACTION = 1.2
 
 
 def _separate_overlapping_boxes(calibration: dict):
@@ -310,10 +319,22 @@ def snap_cell_box(crop_bgr: np.ndarray, cell_box: tuple) -> tuple:
     width, height = x2 - x1, y2 - y1
     binary = threshold_cell(crop_bgr, height)
 
-    # A line only counts if it runs at least half the cell's own
-    # extent -- the same length test digit_reader uses to tell
-    # printed rules from handwriting.
-    verticals = _ruled_line_positions(binary, axis=0, run_length=int(height * 0.5))
+    # A horizontal line only counts if it runs at least half the cell's
+    # width -- no handwriting or printed text is that long sideways.
+    #
+    # A vertical line has to be much longer than that: more than the
+    # cell's full height. Half a cell's height is not enough, because
+    # the printed "$4.20" in the Unit Price column just right of the
+    # Return box has strokes that tall. Those were being taken for the
+    # column divider, stopping the Return box's edge in the middle of
+    # the price instead of on the divider, so the price was read as a
+    # return quantity ("$4.2" as "831"). A real divider runs unbroken
+    # through the rows above and below too, which the analysis crop
+    # includes, so it clears this easily; no digit or printed
+    # character does.
+    verticals = _ruled_line_positions(
+        binary, axis=0, run_length=int(height * DIVIDER_MIN_LENGTH_CELL_FRACTION)
+    )
     horizontals = _ruled_line_positions(binary, axis=1, run_length=int(width * 0.5))
 
     def snap(edge, centre, candidates, limit):
@@ -391,37 +412,62 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
         _save_results(result, output_dir)
         return result
 
+    def segment_cell(row, field, box_key):
+        """Crop, segment and save one cell -- everything but the model."""
+        analysis_crop, cell_box = crop_cell(
+            image,
+            row[box_key],
+            corners,
+            ANALYSIS_HORIZONTAL_MARGIN_FRACTION,
+            ANALYSIS_VERTICAL_MARGIN_FRACTION,
+        )
+        cell_box = snap_cell_box(analysis_crop, cell_box)
+        segmented = segment_digit_blobs(analysis_crop, cell_box)
+
+        # Saved separately and tighter -- what a reviewer needs to
+        # see is not what the reader needs to measure against.
+        review_crop, _ = crop_cell(
+            image,
+            row[box_key],
+            corners,
+            REVIEW_HORIZONTAL_MARGIN_FRACTION,
+            REVIEW_VERTICAL_MARGIN_FRACTION,
+        )
+        cv2.imwrite(
+            os.path.join(crops_dir, f"row{row['row_index']:02d}_{field}.png"), review_crop
+        )
+        return segmented
+
+    # The image work for each cell is independent and OpenCV releases
+    # Python's lock while it runs, so cells are segmented on all cores
+    # at once. The model then reads them one at a time in row order,
+    # exactly as before, so results don't depend on thread timing.
+    fields = (("qty", "quantity_box"), ("return", "return_box"))
+    with ThreadPoolExecutor() as pool:
+        segmented = {
+            (row["row_index"], field): pool.submit(segment_cell, row, field, box_key)
+            for row in calibration["rows"]
+            for field, box_key in fields
+        }
+
     rows_out = []
     for row in calibration["rows"]:
         row_index = row["row_index"]
         product_name = product_names.get(row_index, "")
 
-        results = {}
-        for field, box_key in (("qty", "quantity_box"), ("return", "return_box")):
-            analysis_crop, cell_box = crop_cell(
-                image,
-                row[box_key],
-                corners,
-                ANALYSIS_HORIZONTAL_MARGIN_FRACTION,
-                ANALYSIS_VERTICAL_MARGIN_FRACTION,
-            )
-            cell_box = snap_cell_box(analysis_crop, cell_box)
-            results[field] = read_number(analysis_crop, cell_box, model, device)
-
-            # Saved separately and tighter -- what a reviewer needs to
-            # see is not what the reader needs to measure against.
-            review_crop, _ = crop_cell(
-                image,
-                row[box_key],
-                corners,
-                REVIEW_HORIZONTAL_MARGIN_FRACTION,
-                REVIEW_VERTICAL_MARGIN_FRACTION,
-            )
-            cv2.imwrite(
-                os.path.join(crops_dir, f"row{row_index:02d}_{field}.png"), review_crop
-            )
-
+        results = {
+            field: classify_blobs(*segmented[(row_index, field)].result(), model, device)
+            for field, _ in fields
+        }
         qty_result, return_result = results["qty"], results["return"]
+
+        # More returned than was ordered is almost never real on this
+        # form -- it is what a misread Return box looks like (e.g. the
+        # printed price next door read as a number). Checked here, not
+        # in digit_reader, because it needs both fields of the row.
+        if return_result["value"] > qty_result["value"]:
+            return_result["flag_reasons"].append("return_exceeds_quantity")
+            return_result["flagged"] = True
 
         rows_out.append(
             {
@@ -456,23 +502,38 @@ def _save_results(result: dict, output_dir: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("image_path", help="Path to a new invoice scan image.")
+    parser.add_argument(
+        "image_paths",
+        nargs="+",
+        help="One or more invoice scan images. Passing several in one run "
+        "is much faster than one run each: loading PyTorch and the model "
+        "takes ~20s and is then paid only once.",
+    )
     parser.add_argument(
         "--output-dir",
-        default=None,
-        help="Where to write results.json and crops/ (default: extractions/<image basename>/).",
+        default="extractions",
+        help="Folder that each invoice's own <image basename>/ results folder goes in.",
     )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(CHECKPOINT_PATH, device)
 
-    output_dir = args.output_dir or os.path.join(
-        "extractions", os.path.splitext(os.path.basename(args.image_path))[0]
-    )
+    # Windows shells hand "invoices/*.png" over literally rather than
+    # expanding it, so expand patterns here.
+    image_paths = [
+        match for pattern in args.image_paths for match in (sorted(glob.glob(pattern)) or [pattern])
+    ]
+    for image_path in image_paths:
+        output_dir = os.path.join(
+            args.output_dir, os.path.splitext(os.path.basename(image_path))[0]
+        )
+        print(f"\n=== {image_path} ===")
+        _print_result(extract_invoice(image_path, output_dir, model, device), output_dir)
 
-    result = extract_invoice(args.image_path, output_dir, model, device)
 
+def _print_result(result: dict, output_dir: str):
+    """Print one invoice's extraction as a table on the console."""
     if result["invoice_flagged"]:
         print(f"INVOICE FLAGGED: {result['reason']} -- needs manual handling, no rows extracted.")
         return

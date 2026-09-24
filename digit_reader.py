@@ -116,6 +116,22 @@ MIN_BLOB_AREA_FRACTION = 0.006
 # like a flat "0" -- so the two run as alternatives.
 MIN_BLOB_HEIGHT_FRACTION = 0.5
 
+# ...and a mark that is the ONLY one in its box has to be at least this
+# tall relative to the cell, whatever its area. A digit written on its
+# own is full-height handwriting; what sits alone and short in an
+# otherwise empty box is a speck of paper texture, a stroke from the
+# next row, or a smudge. The area test above can't tell those apart
+# once the box has been snapped tight to its printed lines, because a
+# smaller box makes the same speck a larger share of it -- which is how
+# empty Return boxes started reading "3" or "2". Checked by eye against
+# every lone mark under 0.6 of the cell's height across all 96 sample
+# pages: nearly all under 0.5 were junk, and the few real digits among
+# them were multi-digit numbers that had already broken into pieces.
+# The half-height trailing zeros described in CLAUDE.md are never
+# alone -- they always sit beside a full-height digit -- so this
+# doesn't affect them.
+MIN_LONE_DIGIT_HEIGHT_FRACTION = 0.5
+
 # A fragment only counts as evidence of a split digit if it is at
 # least this tall relative to the cell -- tall enough to be a pen
 # stroke rather than a scrap. Without this the flag was close to
@@ -377,12 +393,19 @@ def _owned_ink(ink: np.ndarray, cell_box: tuple) -> np.ndarray:
 
     num_groups, group_labels = cv2.connectedComponents(grouped, connectivity=8)
 
-    owned = np.zeros(ink.shape, dtype=bool)
-    for group in range(1, num_groups):
-        ys, xs = np.nonzero(group_labels == group)
-        inside = ((ys >= y1) & (ys <= y2) & (xs >= x1) & (xs <= x2)).sum() / len(ys)
-        if inside >= MIN_OWNED_INK_FRACTION:
-            owned[ys, xs] = True
+    # Count every group's ink, and how much of it lies inside the box,
+    # in one pass over the crop. Looping over groups and re-scanning
+    # the whole crop for each one cost ~7s per page.
+    height, width = ink.shape
+    rows_inside = (np.arange(height) >= y1) & (np.arange(height) <= y2)
+    cols_inside = (np.arange(width) >= x1) & (np.arange(width) <= x2)
+    inside_box = rows_inside[:, None] & cols_inside[None, :]
+    total = np.bincount(group_labels.ravel(), minlength=num_groups)
+    inside = np.bincount(group_labels[inside_box], minlength=num_groups)
+
+    keep = np.zeros(num_groups, dtype=bool)
+    keep[1:] = inside[1:] / total[1:] >= MIN_OWNED_INK_FRACTION
+    owned = keep[group_labels]
 
     return np.where(owned, ink, 0).astype(np.uint8)
 
@@ -493,12 +516,17 @@ def segment_digit_blobs(cell_bgr: np.ndarray, cell_box: tuple) -> list[np.ndarra
             or (blob["y2"] - blob["y1"]) >= MIN_BLOB_HEIGHT_FRACTION * cell_height
         )
 
-    fragment_count = sum(
-        1 for b in blobs
-        if not is_digit(b)
-        and (b["y2"] - b["y1"]) >= MIN_FRAGMENT_HEIGHT_FRACTION * cell_height
-    )
+    def is_stroke_sized(blob):
+        return (blob["y2"] - blob["y1"]) >= MIN_FRAGMENT_HEIGHT_FRACTION * cell_height
+
+    fragment_count = sum(1 for b in blobs if not is_digit(b) and is_stroke_sized(b))
     blobs = [b for b in blobs if is_digit(b)]
+
+    # A short mark with nothing beside it isn't read as a digit -- see
+    # MIN_LONE_DIGIT_HEIGHT_FRACTION.
+    if len(blobs) == 1 and (blobs[0]["y2"] - blobs[0]["y1"]) < MIN_LONE_DIGIT_HEIGHT_FRACTION * cell_height:
+        fragment_count += is_stroke_sized(blobs[0])
+        blobs = []
 
     # Sort left to right by box centre -- this is what makes
     # concatenating classified digits into a number correct (a "3"
@@ -572,8 +600,27 @@ def read_number(cell_bgr: np.ndarray, cell_box: tuple, model: DigitCNN, device) 
             "possible_split_digit", "unreadable_ink",
             "low_confidence".
     """
-    blobs, fragment_count = segment_digit_blobs(cell_bgr, cell_box)
+    return classify_blobs(*segment_digit_blobs(cell_bgr, cell_box), model, device)
 
+
+def classify_blobs(blobs: list, fragment_count: int, model: DigitCNN, device) -> dict:
+    """
+    The second half of read_number(): read already-segmented blobs
+    with the model and decide the flags.
+
+    Split out so a caller can run the slow image work
+    (segment_digit_blobs) for many cells in parallel threads, then
+    pass each result through here one at a time.
+
+    Args:
+        blobs, fragment_count: exactly what segment_digit_blobs()
+            returned for one cell.
+        model: the fine-tuned DigitCNN, in eval mode.
+        device: torch device to run inference on.
+
+    Returns:
+        The same dict as read_number().
+    """
     if not blobs:
         # A blank cell is a normal, valid reading (see CLAUDE.md:
         # "treat blank as 0, not as a missing/error value") -- not

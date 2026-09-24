@@ -77,6 +77,7 @@ FLAG_EXPLANATIONS = {
     "possible_split_digit": "a leftover stroke -- possibly a digit that was written in disconnected pieces",
     "unreadable_ink": "there was a faint mark here, too small to read -- treated as blank, but worth a look",
     "low_confidence": "the software wasn't confident about a digit here",
+    "return_exceeds_quantity": "the return read here is bigger than the quantity ordered -- usually a misread, e.g. the printed price next door read as a number",
     "border_not_detected": "the software couldn't find the printed table on this scan",
     "aspect_ratio_mismatch": "the detected table doesn't look like the usual form -- possibly a bad or crooked scan",
 }
