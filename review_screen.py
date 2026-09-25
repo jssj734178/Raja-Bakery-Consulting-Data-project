@@ -32,6 +32,20 @@ review.json (customer, corrected values, which fields were originally
 flagged) next to that invoice's results.json -- reading that file and
 pushing it into Odoo is a separate piece, built separately.
 
+Approving also banks digit pictures for future retraining: for every
+Qty/Return field the reviewer leaves BOTH unflagged and unchanged from
+what the software originally read, its individual digit crops (already
+saved by extract_invoice.py into digit_crops/, one small picture per
+digit, in the model's own predicted label) are copied into
+digit_bank/<digit>/ at the project root. Leaving a field alone is a
+strong signal the model's read of it was actually right, so this
+builds a growing pile of free labeled training data with nobody having
+to hand-label anything new -- see CLAUDE.md, "Banking verified-correct
+crops as future training data". A field the reviewer corrected is
+skipped: if the software had mis-split the digits in the first place,
+the corrected number can't always be cleanly matched back onto which
+individual digit picture was wrong.
+
 Controls are mouse-driven (unlike label_tool.py / calibrate_template.py's
 keyboard shortcuts) since this screen is meant for day-to-day use by
 whoever reviews invoices, not just the person building the pipeline.
@@ -44,6 +58,7 @@ Run with:  python review_screen.py
 import argparse
 import json
 import os
+import shutil
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
@@ -52,6 +67,14 @@ from PIL import Image, ImageTk
 
 EXTRACTIONS_DIR = "extractions"
 CUSTOMERS_PATH = "customers.json"
+
+# Where a field's individual digit crops get copied once a reviewer has
+# left it both unflagged and unchanged -- see module docstring and
+# CLAUDE.md, "Banking verified-correct crops as future training data".
+# One subfolder per digit (0-9), the same layout label_tool.py's own
+# invoice_digits/ uses, so these can later be folded straight into a
+# retraining run.
+DIGIT_BANK_DIR = "digit_bank"
 
 # (width, height) bounding box a crop is scaled down to fit inside,
 # keeping its own aspect ratio -- see Image.thumbnail below. Saved crops
@@ -77,6 +100,7 @@ FLAG_EXPLANATIONS = {
     "possible_split_digit": "a leftover stroke -- possibly a digit that was written in disconnected pieces",
     "unreadable_ink": "there was a faint mark here, too small to read -- treated as blank, but worth a look",
     "low_confidence": "the software wasn't confident about a digit here",
+    "leading_zero_digit": "an extra mark was read as a \"0\" in front of the real number -- it didn't change the number shown, but the mark itself should be checked",
     "return_exceeds_quantity": "the return read here is bigger than the quantity ordered -- usually a misread, e.g. the printed price next door read as a number",
     "border_not_detected": "the software couldn't find the printed table on this scan",
     "aspect_ratio_mismatch": "the detected table doesn't look like the usual form -- possibly a bad or crooked scan",
@@ -341,6 +365,11 @@ class ReviewScreen:
             "original_return": row["return"],
             "quantity_was_flagged": bool(row["quantity_flags"]),
             "return_was_flagged": bool(row["return_flags"]),
+            # .get(..., []), not [row[...]], so a results.json written
+            # before digit-crop saving existed still loads instead of
+            # raising a KeyError -- it just has nothing to bank.
+            "quantity_digit_crops": row.get("quantity_digit_crops", []),
+            "return_digit_crops": row.get("return_digit_crops", []),
         })
 
     def _build_field(self, parent: tk.Frame, col: int, label: str, crop_path: str, var: tk.StringVar, flags: list):
@@ -481,6 +510,9 @@ class ReviewScreen:
             messagebox.showerror("Missing customer", "Pick or type a customer before approving.")
             return
 
+        invoice_name = self.invoice_names[self.index]
+        invoice_dir = os.path.join(EXTRACTIONS_DIR, invoice_name)
+
         rows_out = []
         for w in self.row_widgets:
             try:
@@ -495,6 +527,15 @@ class ReviewScreen:
                     f"number of 0 or more. Fix it before approving.",
                 )
                 return
+
+            # Bank a field's digits only when it's both unflagged and
+            # left exactly as the software read it -- see module
+            # docstring for why a corrected field is skipped.
+            if not w["quantity_was_flagged"] and qty == w["original_quantity"]:
+                self._bank_digit_crops(invoice_dir, invoice_name, w["quantity_digit_crops"])
+            if not w["return_was_flagged"] and ret == w["original_return"]:
+                self._bank_digit_crops(invoice_dir, invoice_name, w["return_digit_crops"])
+
             rows_out.append({
                 "row_index": w["row_index"],
                 "product_name": w["product_name"],
@@ -507,7 +548,6 @@ class ReviewScreen:
                 "line_quantity": qty - ret,
             })
 
-        invoice_name = self.invoice_names[self.index]
         review = {
             "invoice_name": invoice_name,
             "customer": customer,
@@ -520,6 +560,40 @@ class ReviewScreen:
 
         messagebox.showinfo("Saved", f"Saved review for '{invoice_name}'.")
         self._update_status(flagged_invoice=False)
+
+    def _bank_digit_crops(self, invoice_dir: str, invoice_name: str, digit_crops: list):
+        """
+        Copy an already-verified field's individual digit crops into
+        digit_bank/<digit>/, for later retraining -- see module
+        docstring and CLAUDE.md, "Banking verified-correct crops as
+        future training data". Only called for a field the reviewer
+        left both unflagged and unchanged, since that's the signal the
+        model's own reading of it was actually right.
+
+        The destination filename is built from the invoice name plus
+        the crop's own saved filename, which is already unique within
+        that invoice (row, field, and digit position) -- so approving
+        the same invoice a second time just overwrites the same files
+        rather than piling up duplicates.
+
+        Args:
+            invoice_dir: extractions/<invoice_name>, where digit_crops/
+                lives (written by extract_invoice.py).
+            invoice_name: this invoice's own name, for the destination
+                filename.
+            digit_crops: a field's "quantity_digit_crops" or
+                "return_digit_crops" list from results.json, each
+                {"path": ..., "predicted_digit": ...}. Empty for a
+                blank field -- nothing to bank.
+        """
+        for crop in digit_crops:
+            source_path = os.path.join(invoice_dir, crop["path"])
+            if not os.path.exists(source_path):
+                continue  # an older results.json predating this feature
+            dest_dir = os.path.join(DIGIT_BANK_DIR, crop["predicted_digit"])
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_name = f"{invoice_name}_{os.path.basename(crop['path'])}"
+            shutil.copyfile(source_path, os.path.join(dest_dir, dest_name))
 
 
 def _load_thumbnail(path: str) -> Image.Image:

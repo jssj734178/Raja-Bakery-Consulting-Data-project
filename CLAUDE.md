@@ -11,19 +11,19 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `alignment.py` | 467 | 131 | 290 | 46 |
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 677 | 188 | 430 | 59 |
-| `extract_invoice.py` | 558 | 242 | 260 | 56 |
+| `digit_reader.py` | 721 | 194 | 466 | 61 |
+| `extract_invoice.py` | 625 | 268 | 298 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
 | `model.py` | 122 | 22 | 84 | 16 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 546 | 290 | 194 | 62 |
+| `review_screen.py` | 620 | 309 | 244 | 67 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **4194** | **1714** | **1981** | **499** |
+| **Total** | **4379** | **1765** | **2105** | **509** |
 
-*Last updated: 2026-09-24.*
+*Last updated: 2026-09-25.*
 
 ## What this is
 
@@ -214,20 +214,49 @@ too, and the two copies would quietly drift apart over time.
   long-term intake path (see above for why), but worth adding anyway as
   a quick way to feed new scans through the pipeline locally without
   typing commands, while the Odoo module is being built.
-- **Banking verified-correct crops as future training data.** When a
-  reviewer leaves a field unflagged and uncorrected, that's a
-  high-confidence signal the model's digit-by-digit read was right, so
-  those digit crops and the model's own labels could be saved into a
-  growing bank for retraining later — free labeled data, without anyone
-  hand-labeling anything new. The one prerequisite: `extract_invoice.py`
-  only saves each whole Qty/Return cell as one crop today, not each
-  individual digit inside it, so it would need to also save the
-  individual digit crops `digit_reader.py` already segments internally
-  before this can work. A *corrected* field is harder to bank this way —
-  if the software had mis-split the digits in the first place, the
-  corrected number can't always be cleanly matched back onto individual
-  digit images — so this would start with unflagged/uncorrected fields
-  only.
+
+**Built (2026-09-25): banking verified-correct crops as future training
+data.** When a reviewer leaves a field unflagged and uncorrected,
+that's a high-confidence signal the model's digit-by-digit read was
+right, so those digit crops and the model's own labels are now saved
+into a growing bank for retraining later — free labeled data, without
+anyone hand-labeling anything new.
+
+- `extract_invoice.py` now saves each individual digit picture
+  `digit_reader.py` already segments internally (not just the whole
+  Qty/Return cell, as before) into each invoice's own
+  `extractions/<name>/digit_crops/` folder, in the exact same format
+  `label_tool.py`'s own labeled training crops use (28x28, grayscale,
+  ink-as-light-on-dark, padded to square before resizing) — so a banked
+  crop can later be used for retraining with no reprocessing.
+  `results.json` now also records, per field, the model's predicted
+  label for each digit alongside the path to its saved picture
+  (`quantity_digit_crops` / `return_digit_crops`).
+- `review_screen.py`'s Approve step now copies a field's digit crops
+  into `digit_bank/<digit>/` at the project root (gitignored, like
+  `invoice_digits/`) whenever a reviewer leaves that field BOTH
+  unflagged and unchanged from what the software originally read — the
+  signal that the read was actually right. A corrected field is
+  skipped, per the reasoning above: if the software had mis-split the
+  digits in the first place, the corrected number can't always be
+  cleanly matched back onto which individual digit picture was wrong.
+  The destination filename is built from the invoice name and the
+  crop's own filename, so re-approving the same invoice just
+  overwrites the same files rather than piling up duplicates.
+- **Found and fixed while building this:** classifying each digit and
+  then joining them into one number (e.g. digits "0" and "6" becoming
+  the number "06", read as 6) was silently swallowing a spurious extra
+  mark read as a leading "0" — with no visible effect on the number
+  shown and, in 8 of 32 cases found across the 96-page sample, no
+  review flag either. Blank cells already read as 0 through a
+  different, correct path (no digits found at all), so a leading "0"
+  in front of another digit is never a real quantity on this form —
+  it's always some other mark. Left alone, this would have quietly
+  banked a wrongly-labeled "0" crop as confirmed-correct training data,
+  since the field looked right and a reviewer would have no reason to
+  touch it. Fixed with a new flag, `leading_zero_digit`, raised
+  whenever this happens, so the field goes in front of a reviewer
+  instead of straight into the bank.
 
 ## Pricing decision reversed: derive price from the invoice itself, not from Odoo (decided 2026-09-23)
 
@@ -763,6 +792,8 @@ yet.
 
 ## Current data state
 
-`invoice_digits/` has a real train/val/test split (several hundred to a thousand+ crops per digit in train, proportionally fewer in val/test) and is now finalized — no further labeled invoice data is expected. Digit classes are imbalanced — `0` has roughly 3-4x more examples than digits like `7`-`9`, handled via class-weighted loss in `finetune.py` rather than by collecting more data for the rare classes.
+`invoice_digits/` has a real train/val/test split (several hundred to a thousand+ crops per digit in train, proportionally fewer in val/test) and is now finalized — no further hand-labeled invoice data is expected. Digit classes are imbalanced — `0` has roughly 3-4x more examples than digits like `7`-`9`, handled via class-weighted loss in `finetune.py` rather than by collecting more data for the rare classes.
+
+Separately, `digit_bank/` (new as of 2026-09-25, gitignored, empty until real invoices start getting approved) grows on its own as `review_screen.py` approves invoices — see "Banking verified-correct crops as future training data" above. It is not yet merged into `invoice_digits/`'s train/val/test split or used by `finetune.py`; that merge is future work, once there's enough banked data to be worth a retraining run.
 
 The shipped `checkpoints/digit_cnn_finetuned.pt` (regenerate with `python finetune.py`) reaches **94.19% test accuracy**. Digits `3` and `9` were historically the weakest (most often confused with `8`/`1` and `4`/`7` respectively); see [FINETUNING_NOTES.md](FINETUNING_NOTES.md) for the diagnosis, including a spot-check suggesting some of the remaining `9`→misclassified-as-something-else cases may be labeling errors rather than model errors — worth a manual look at the flagged crops listed there before assuming the model is at fault.

@@ -46,6 +46,13 @@ invoice_digits/
 # scans it is cut from, so it is excluded for both reasons above.
 extractions/
 
+# Individual digit crops banked by review_screen.py's Approve step,
+# once a reviewer has confirmed a field was read correctly -- see
+# CLAUDE.md, "Banking verified-correct crops as future training data".
+# Same reasoning as invoice_digits/ above: real business paperwork,
+# and regenerable (by re-approving invoices) rather than a one-off.
+digit_bank/
+
 # OS-generated junk files
 .DS_Store
 Thumbs.db

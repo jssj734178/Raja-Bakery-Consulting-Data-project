@@ -24,7 +24,13 @@ import torch
 from PIL import Image
 
 from alignment import detect_border_corners, proportion_to_pixel, validate_aspect_ratio
-from digit_reader import classify_blobs, load_model, segment_digit_blobs, threshold_cell
+from digit_reader import (
+    classify_blobs,
+    load_model,
+    prepare_digit_image,
+    segment_digit_blobs,
+    threshold_cell,
+)
 
 # 300 DPI full-page invoice scans routinely exceed Pillow's default
 # decompression-bomb pixel-count guard even though they're legitimate,
@@ -365,6 +371,47 @@ def snap_cell_box(crop_bgr: np.ndarray, cell_box: tuple) -> tuple:
     )
 
 
+def _save_digit_crops(
+    blobs: list, digits: list, digit_crops_dir: str, row_index: int, field: str
+) -> list:
+    """
+    Save each of a field's segmented digit blobs as its own small PNG,
+    pixel-for-pixel in the same format label_tool.py's own labeled
+    training crops use (28x28, grayscale, ink-as-light-on-dark, padded
+    to square before resizing).
+
+    Saved for every field regardless of whether it was flagged or has
+    any ink at all (an empty field just saves nothing) -- these become
+    useful once review_screen.py's Approve step decides, per field,
+    whether a human left it both unflagged and uncorrected, which is
+    the signal that the model's own read of it was actually right (see
+    CLAUDE.md, "Banking verified-correct crops as future training
+    data"). That decision happens later and elsewhere, so this step
+    only needs to save the pictures and record what the model guessed
+    each one was -- not decide anything about trustworthiness itself.
+
+    Args:
+        blobs: this field's segmented digit images, left to right, as
+            returned by segment_digit_blobs().
+        digits: the model's predicted label for each blob, same order,
+            from classify_blobs()'s "digits".
+        digit_crops_dir: this invoice's digit_crops/ output folder.
+        row_index: this row's index, used in the filename.
+        field: "qty" or "return", used in the filename.
+
+    Returns:
+        A list of dicts, one per digit, each {"path": ..., "predicted_digit": ...}.
+        "path" is relative to the invoice's own output_dir, the same
+        convention results.json already uses for crop images.
+    """
+    saved = []
+    for position, (blob, digit) in enumerate(zip(blobs, digits)):
+        filename = f"row{row_index:02d}_{field}_{position}.png"
+        cv2.imwrite(os.path.join(digit_crops_dir, filename), prepare_digit_image(blob))
+        saved.append({"path": f"digit_crops/{filename}", "predicted_digit": digit})
+    return saved
+
+
 def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
     """
     Run the full per-invoice extraction pipeline against one scanned
@@ -375,11 +422,16 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
     Args:
         image_path: path to a new invoice scan (a PNG rendered by
             pdf_to_images.py, or any image of the same fixed template).
-        output_dir: directory to write results.json and per-cell crop
-            images into (created if missing) -- the crops are saved
-            regardless of whether a field was flagged, since the
-            (not yet built) review step needs to show every field's
-            source image, not just the flagged ones.
+        output_dir: directory to write results.json, per-cell crop
+            images (crops/), and per-digit crop images (digit_crops/)
+            into (created if missing) -- both sets of crops are saved
+            regardless of whether a field was flagged: crops/ so the
+            review step can show every field's source image, not just
+            the flagged ones, and digit_crops/ so a later approval can
+            bank a field's individual digits for retraining once a
+            human has confirmed the field was read correctly (see
+            CLAUDE.md, "Banking verified-correct crops as future
+            training data").
         model: the fine-tuned DigitCNN, in eval mode.
         device: torch device to run inference on.
 
@@ -396,6 +448,8 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
     os.makedirs(output_dir, exist_ok=True)
     crops_dir = os.path.join(output_dir, "crops")
     os.makedirs(crops_dir, exist_ok=True)
+    digit_crops_dir = os.path.join(output_dir, "digit_crops")
+    os.makedirs(digit_crops_dir, exist_ok=True)
 
     # Both reliability guards from the project plan: outright
     # detection failure, or a detected border whose shape doesn't
@@ -455,9 +509,13 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
         row_index = row["row_index"]
         product_name = product_names.get(row_index, "")
 
+        # .result() on each field's Future is only fetched once here
+        # and reused below (for classification AND for saving digit
+        # crops), rather than called again per use.
+        segmented_by_field = {field: segmented[(row_index, field)].result() for field, _ in fields}
         results = {
-            field: classify_blobs(*segmented[(row_index, field)].result(), model, device)
-            for field, _ in fields
+            field: classify_blobs(*segmented_by_field[field], model, device)
+            for field in segmented_by_field
         }
         qty_result, return_result = results["qty"], results["return"]
 
@@ -469,6 +527,13 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
             return_result["flag_reasons"].append("return_exceeds_quantity")
             return_result["flagged"] = True
 
+        quantity_digit_crops = _save_digit_crops(
+            segmented_by_field["qty"][0], qty_result["digits"], digit_crops_dir, row_index, "qty"
+        )
+        return_digit_crops = _save_digit_crops(
+            segmented_by_field["return"][0], return_result["digits"], digit_crops_dir, row_index, "return"
+        )
+
         rows_out.append(
             {
                 "row_index": row_index,
@@ -476,9 +541,11 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
                 "quantity": qty_result["value"],
                 "quantity_confidences": qty_result["digit_confidences"],
                 "quantity_flags": qty_result["flag_reasons"],
+                "quantity_digit_crops": quantity_digit_crops,
                 "return": return_result["value"],
                 "return_confidences": return_result["digit_confidences"],
                 "return_flags": return_result["flag_reasons"],
+                "return_digit_crops": return_digit_crops,
                 # Quantity minus Return, per row -- the actual
                 # line-item quantity (see CLAUDE.md's design notes).
                 # Computed even when a field is flagged, since it's

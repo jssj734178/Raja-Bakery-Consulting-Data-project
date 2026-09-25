@@ -538,13 +538,40 @@ def segment_digit_blobs(cell_bgr: np.ndarray, cell_box: tuple) -> list[np.ndarra
     ], fragment_count
 
 
+def prepare_digit_image(blob: np.ndarray) -> np.ndarray:
+    """
+    Pad one segmented digit blob to a square and resize it to 28x28 --
+    mirroring label_tool.py's own preprocessing exactly (pad to square
+    BEFORE resizing, so a digit's proportions aren't distorted, ink
+    already light-on-dark from segment_digit_blobs).
+
+    Shared by _preprocess_blob (which goes on to normalize this for
+    the model) and by extract_invoice.py, which saves this same image
+    to disk as a PNG -- pixel-for-pixel the same format label_tool.py
+    itself saves, so a saved crop can later be dropped straight into a
+    retraining bank with no reprocessing (see CLAUDE.md, "Banking
+    verified-correct crops as future training data").
+
+    Args:
+        blob: a binary (0/255) crop containing one digit's ink,
+            already light-on-dark (see segment_digit_blobs).
+
+    Returns:
+        A (28, 28) uint8 array, ink as light-on-dark.
+    """
+    h, w = blob.shape
+    side = max(h, w)
+    padded = np.zeros((side, side), dtype=np.uint8)
+    top, left = (side - h) // 2, (side - w) // 2
+    padded[top:top + h, left:left + w] = blob
+    return cv2.resize(padded, (28, 28), interpolation=cv2.INTER_AREA)
+
+
 def _preprocess_blob(blob: np.ndarray) -> torch.Tensor:
     """
     Convert one segmented digit blob into the 28x28, MNIST-normalized
-    tensor DigitCNN expects -- mirroring label_tool.py's own
-    preprocessing (pad to square BEFORE resizing, so a digit's
-    proportions aren't distorted) so the model sees the same kind of
-    input it was fine-tuned on, not something subtly different.
+    tensor DigitCNN expects, so the model sees the same kind of input
+    it was fine-tuned on, not something subtly different.
 
     Args:
         blob: a binary (0/255) crop containing one digit's ink,
@@ -553,13 +580,7 @@ def _preprocess_blob(blob: np.ndarray) -> torch.Tensor:
     Returns:
         A (1, 1, 28, 28) tensor ready to feed to DigitCNN.
     """
-    h, w = blob.shape
-    side = max(h, w)
-    padded = np.zeros((side, side), dtype=np.uint8)
-    top, left = (side - h) // 2, (side - w) // 2
-    padded[top:top + h, left:left + w] = blob
-    resized = cv2.resize(padded, (28, 28), interpolation=cv2.INTER_AREA)
-
+    resized = prepare_digit_image(blob)
     arr = resized.astype(np.float32) / 255.0
     arr = (arr - MNIST_MEAN) / MNIST_STD
     return torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)
@@ -592,6 +613,12 @@ def read_number(cell_bgr: np.ndarray, cell_box: tuple, model: DigitCNN, device) 
             project's convention -- blank means 0, not a missing
             value). A best-effort reading otherwise, trustworthy
             exactly when "flagged" is False.
+          - "digits": list of the model's predicted label for each
+            blob, in reading order, as single-character strings (e.g.
+            ["3", "0"]) -- kept separately from "value" because
+            joining them into one string can silently drop a leading
+            "0", which the caller needs to still pair each saved digit
+            crop with its own predicted label.
           - "digit_confidences": list of per-digit softmax
             confidences, in reading order.
           - "flagged": bool -- True if this field needs human review.
@@ -630,6 +657,7 @@ def classify_blobs(blobs: list, fragment_count: int, model: DigitCNN, device) ->
         reasons = ["unreadable_ink"] if fragment_count else []
         return {
             "value": 0,
+            "digits": [],
             "digit_confidences": [],
             "flagged": bool(reasons),
             "flag_reasons": reasons,
@@ -669,8 +697,24 @@ def classify_blobs(blobs: list, fragment_count: int, model: DigitCNN, device) ->
     if any(c < LOW_CONFIDENCE_THRESHOLD for c in confidences):
         flag_reasons.append("low_confidence")
 
+    # A real quantity on this form never legitimately starts with "0"
+    # -- a genuinely blank cell already reads as 0 with no blobs at
+    # all (see the early return above), so a leading "0" ahead of at
+    # least one more digit is always some other mark segmented as its
+    # own blob, not a real digit. Concatenating digits into "value"
+    # silently drops it (int("06") == 6), which used to make this
+    # invisible: the field looked right, so nobody had a reason to
+    # correct it, and it would have been banked as confirmed-correct
+    # training data with a wrong "0" label attached (see
+    # extract_invoice.py's digit crop saving). Flagging it instead
+    # keeps it in front of a reviewer and out of the training bank
+    # until it's actually looked at.
+    if len(digits) > 1 and digits[0] == "0":
+        flag_reasons.append("leading_zero_digit")
+
     return {
         "value": int("".join(digits)),
+        "digits": digits,
         "digit_confidences": confidences,
         "flagged": len(flag_reasons) > 0,
         "flag_reasons": flag_reasons,
