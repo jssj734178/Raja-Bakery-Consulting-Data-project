@@ -334,20 +334,20 @@ Windows machine):
   installable that way, since it's currently loose top-level scripts
   that import each other directly.
 
-**Status as of 2026-09-24: not yet built.** The plan above (Total Price
-column, then the Odoo module itself) was going to be handed to a
-separate cloud Claude Code session, but that session never ran. Nothing
-from it exists — no `bakery_odoo` project, no Total Price code. Both
-still need to be built from scratch here.
+**Status as of 2026-09-25: still not yet built, but everything blocking
+the start of the build is now answered** (see "Answers from Jagbir
+(2026-09-25)" below). The plan (saving digit pictures for retraining →
+Total Price → a quick desktop "send to Odoo" button → the full Odoo
+module) can now start from scratch in a future session.
 
-## Information needed from Jagbir to finish the build (listed 2026-09-24)
+## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 
 Everything the remaining build (Total Price, saving digit pictures for
-retraining, the Odoo module, setting it up on the Mac) needs that
-can't be worked out from the code or the scans. **Tick items off and
-write the answer next to them as they come in**, so a future session
-knows what's settled. Already on hand, so not asked: the 24 product
-names in form order (`product_rows.json`), the 39 regular customers
+retraining, the Odoo module, setting it up on the Mac) needed that
+couldn't be worked out from the code or the scans alone. Kept here,
+answers and all, so a future session knows what's settled. Already on
+hand before this list was even written: the 24 product names in form
+order (`product_rows.json`), the 39 regular customers
 (`customers.json`), and the Odoo test server's setup (see "The Odoo
 server this will actually run on" above).
 
@@ -355,155 +355,157 @@ server this will actually run on" above).
 Where one is needed, it should be given in the chat or put in a local
 settings file that git ignores.
 
-**Plan for the next session (set by Jagbir 2026-09-24):** Jagbir will
-answer all the questions below at the start of the next session. Before
-that, **discuss the paper invoice number first** (item 0 just below).
-
-### 0. FIRST ITEM NEXT SESSION: using the paper invoice number in Odoo
+### 0. Decided (2026-09-25): the paper invoice number becomes a label, not Odoo's own invoice number
 
 Each paper invoice has its own number printed in the top right corner
-(e.g. "Invoice: 21157"). Jagbir wants to capture it and either:
+(e.g. "Invoice: 21157"), always in the same spot on every invoice book
+(confirmed by Jagbir). **Decision: option (a)** — attach it to the Odoo
+invoice as a label (e.g. Odoo's built-in reference field, or a tag), so
+the Odoo invoice can be searched by the paper number and matched back
+to the paper copy. Odoo keeps its own separate numbering
+(`INV/2026/00001`-style), which its accounting features expect — the
+touchier option (b), replacing Odoo's own numbering with the paper
+number, was not chosen.
 
-- **(a) attach it to the Odoo invoice as a label** — e.g. Odoo's
-  built-in reference field on the invoice, or a tag — so the Odoo
-  invoice can be searched by the paper number and matched back to the
-  paper copy; or
-- **(b) use it as the Odoo invoice's own number,** instead of Odoo's
-  usual numbering (like "INV/2026/00001").
+This still gives the free duplicate check discussed: if an invoice with
+the same paper number has already been approved, warn before creating a
+second one.
 
-Things to weigh up in that discussion:
+**Reading the number:** it's printed type, not handwriting. The digit
+model was trained on handwriting, so how well it reads printed digits
+hasn't been tested. It would need a new box added to the calibration
+for the number's position, and it must be measured before being
+trusted. The review screen should always show the number, with a
+picture of it, for the reviewer to confirm or type in, the same as the
+other fields.
 
-- **(a) is simple and low-risk.** It's just an extra piece of
-  information on the invoice. Odoo keeps its own numbering, which its
-  accounting features expect.
-- **(b) is possible but touchier.** Odoo expects its invoice numbers
-  to be unique and to go up in order within each journal, and warns
-  about gaps or numbers out of order. Paper numbers may not come in
-  order: several invoice books could be in use at once, or invoices
-  could be scanned out of order. And one misread number could clash
-  with a real one. Worth confirming with whoever does the bakery's
-  accounting before choosing it.
-- **Either way, it gives a free duplicate check:** if an invoice with
-  the same paper number has already been approved, warn before
-  creating a second one. That stops the same invoice being entered
-  twice.
-- **Reading the number:** it's printed type, not handwriting. The digit
-  model was trained on handwriting, so how well it reads printed digits
-  hasn't been tested. It would need a new box added to the calibration
-  for the number's position, and it must be measured before being
-  trusted. The review screen should always show the number, with a
-  picture of it, for the reviewer to confirm or type in, the same as
-  the other fields.
-- Questions for Jagbir: which option, (a) or (b)? Is the number always
-  printed in the same place on every invoice book? Are the numbers
-  unique across all books in use?
+**New open concern, raised by Jagbir 2026-09-25: the number may not
+always be visible.** Even though it's always printed in the same spot,
+Jagbir suspects it might sometimes be cut off, obscured, or missing on
+a given scan (e.g. a crooked scan cropping it out, or a faded/damaged
+copy). Since the duplicate check and the searchable label both depend
+on this number being read, the pipeline needs a defined fallback for
+when it can't be read: at minimum, flag the invoice for the reviewer to
+type the number in by hand (same "always shown, reviewer confirms or
+types in" treatment already planned above), and the duplicate check
+simply can't run for that invoice until a number is entered. Not
+designed in detail yet — worth revisiting once the box is actually
+added to calibration and real scans can be checked for how often this
+happens.
 
-### Needed before starting (the build stalls without these)
+Whether the numbers are unique across all invoice books in use is still
+unconfirmed — needed before the duplicate-check logic can be trusted.
 
-- [ ] **1. Are the 24 products already set up in Odoo?** If yes: are
-  their names exactly as in `product_rows.json`? Also, does each have
-  the barcode printed on the form (e.g. `#068721002512`) filled in? The
-  barcode is the most reliable way to match a form row to an Odoo
-  product, since names get spelled differently. If no: can Claude
-  create them on the test server from the form?
-- [ ] **2. Are the 39 customers set up in Odoo as contacts,** spelled
-  as in `customers.json`?
-- [ ] **3. When a reviewer types a one-off customer who isn't in Odoo,**
-  should Approve create a new Odoo contact automatically, or refuse
-  until someone adds the contact by hand?
-- [ ] **4. Is it okay to create test products, contacts and draft
-  invoices on the Odoo test server** (in WSL) while building? They can
-  be deleted afterwards.
-- [ ] **5. Is Odoo's Invoicing (or Accounting) app installed and set
-  up on the test server,** with Canadian dollars and 13% HST? Draft
-  invoices can't be created without it.
+### Answers from Jagbir (2026-09-25)
 
-### Money and tax (needed for the Total Price work)
+Every question below has now been answered, so the build can proceed.
+Kept under the same headings and numbers as before, for reference.
 
-- [ ] **6. How is Total Price worked out when there are returns?** Is
-  it (Qty − Return) × price, or Qty × price with returns credited
-  somewhere else, like the "Return" line at the bottom of the form? The
-  plan divides Total Price by (Qty − Return), which is only right if
-  it's the first one.
-- [ ] **7. When a row has more returned than delivered** (a
-  negative line), should the Odoo invoice show a negative line, or
-  should returns go on a separate credit note?
-- [ ] **8. Which products are charged HST?** Basic bread is usually
-  tax-free in Canada, but items like Taki Chips, Twinkies and cakes
-  usually aren't. Is this already set on the products in Odoo, or
-  should Claude be given the list?
-- [ ] **9. The last three printed rows (Twinkies/Cupcakes, Lune Moon
-  Cake, Taki Chips) have no printed price.** Is their price always
-  written in by hand, and should it be read from Total Price the same
-  way as the others?
-- [ ] **10. Do people ever handwrite extra products into the empty
-  rows at the bottom of the table?** The software only reads the 24
-  printed rows, so anything written below them is currently missed
-  without any warning.
-- [ ] **11. Should the software also read the Subtotal / HST / TOTAL
-  boxes at the bottom of the form,** to double-check that its row totals
-  add up? That catches misreads, but it's extra work and those boxes
-  are handwritten too.
+**Needed before starting:**
 
-### The paper invoice's other details
+1. & 2. **The 24 products and 39 customers are already set up in Odoo,
+   spelled exactly as in `product_rows.json` and `customers.json`.**
+   Every product also already has its barcode filled in (the same one
+   printed on the form, e.g. `#068721002512`) — so matching a form row
+   to its Odoo product should go by barcode, not by name, since names
+   are more likely to be spelled slightly differently between the form
+   and Odoo.
+3. **If a reviewer types a one-off customer who isn't already in
+   Odoo, Approve should create them as a new Odoo contact
+   automatically** — not refuse and wait for someone to add them by
+   hand.
+4. **Do not create any new products or contacts on the test server**
+   while building — use only the ones already there. Test invoices and
+   drafts using those existing products/contacts are fine and expected.
+5. **Odoo's Invoicing/Accounting app is already installed and set up**
+   on the test server.
 
-- [ ] **12. The paper invoice's number is covered by item 0 above.**
-  Separately: should the Odoo invoice use the paper invoice's
-  handwritten date, or the date it's approved?
-- [ ] **13. The "Paid / NOT PAID" box:** should Odoo record anything
-  from it, or ignore it? The current plan ignores it, since invoices
-  are left as drafts for a person to finish in Odoo.
+**Money and tax:**
 
-### How scans arrive
+6. **Total Price = (Qty − Return) × price**, confirmed. That's the
+   formula the pricing plan above already assumed, so `unit price =
+   Total Price ÷ (Qty − Return)` stands as designed.
+7. **A row with more returned than delivered should never actually
+   happen** — if it does, it means something is wrong further back
+   (a misread, or a real paperwork problem) that needs fixing right
+   away, not a normal case to quietly compute an answer for. When it
+   does happen, it should show as a separate note on the invoice
+   (distinct from an ordinary line) rather than being folded in as a
+   negative quantity — and separately, it should stay impossible to
+   miss, since it's meant to be treated as urgent. (The
+   `return_exceeds_quantity` flag added 2026-09-24 already catches most
+   of these before Approve; this decision covers the rare one that
+   still gets approved anyway.)
+8. **Ignore HST/tax entirely for now.** Invoice lines go in exactly as
+   the paper copy shows, with no tax added.
+9. **The three rows with no printed price (Twinkies/Cupcakes, Lune
+   Moon Cake, Taki Chips) aren't being sold yet** — nothing needs to be
+   built for them for now.
+10. **Nobody handwrites extra products into the blank rows at the
+    bottom of the table** — not a case the software needs to handle.
+11. **The software doesn't need to read the Subtotal/HST/TOTAL boxes
+    at the bottom of the form.** The Odoo invoice's total should just
+    be the sum of the individual product lines it creates from the 24
+    printed rows — no separate cross-check against a handwritten total.
 
-- [ ] **14. How are invoices captured day to day:** a flatbed or
-  sheet-feed scanner, or phone photos? Phone photos are what caused the
-  one page whose table outline was found in the wrong place. A scanner
-  at 300 DPI is much more reliable.
-- [ ] **15. Is it always one invoice per page, one page per invoice?**
-  And roughly how many invoices a day or week? That decides how fast
-  the server needs to be.
-- [ ] **16. Do scans ever come in sideways or upside down?**
-  `pdf_to_images.py` has a rotate option, but the Odoo upload would need
-  to detect this by itself or offer a rotate button.
+**The paper invoice's other details:**
 
-### Who uses it, and from where
+12. **Use the invoice's own handwritten date** for the Odoo invoice,
+    not the date it happens to be approved — these two dates won't
+    always be the same day.
+13. **Every invoice starts as unpaid in Odoo**, until someone changes
+    that by hand later — nothing needs to be read from the paper's
+    Paid/NOT PAID box.
 
-- [ ] **17. Who will review invoices, and how many people?** Each needs
-  an Odoo login.
-- [ ] **18. Will phones or computers need to reach Odoo only from the
-  bakery's own Wi-Fi, or also from outside** (home, on the road)? Only
-  on the bakery's Wi-Fi is simple. From outside needs a web address,
-  a secure connection (HTTPS) and more care about security, and is a
-  noticeably bigger job.
+**How scans arrive:**
 
-### The onsite Mac (needed for setup, not for building)
+14. **Invoices are scanned and brought in as PDFs**, not phone photos
+    — good, since a phone photo is what caused the one bad
+    border-detection case described above.
+15. **One invoice per page, but a day's batch is a single PDF holding
+    several invoices side by side (one per page)** — usually around
+    8-14 invoices a day. `pdf_to_images.py` and `extract_invoice.py`
+    already handle a multi-page/multi-file batch this way.
+16. **Scans are always right-side up** — no sideways/upside-down
+    handling needs building.
 
-- [ ] **19. Which Mac is it:** Apple menu → About This Mac. The chip
-  (Apple M1/M2/M3/M4, or Intel), macOS version, memory (RAM), and free
-  disk space.
-- [ ] **20. Will it stay switched on all the time?** Odoo on it is only
-  reachable while it's on.
-- [ ] **21. Is this Mac going to hold the real, day-to-day Odoo,** or is
-  there already a real Odoo somewhere else that this should connect
-  to? And does anything from the test server need moving over?
-- [ ] **22. Backups:** where should copies of the Odoo database and the
-  uploaded scans go (an external drive, a cloud service)? Without
-  backups, a dead Mac means every invoice is lost.
-- [ ] **23. Someone onsite with the Mac's admin password** for the
-  setup day, to install Docker and approve its permissions.
+**Who uses it, and from where:**
 
-### Decisions
+17. **One person actively handles invoice review.**
+18. **Reachable only on the bakery's own Wi-Fi is acceptable if that
+    turns out to be the only option, but reachable from outside too
+    (home, on the road) is preferred** if it's not too much extra
+    work.
 
-- [ ] **24. Build order.** Suggested: saving digit pictures for
-  retraining → Total Price → a quick "send to Odoo" button on the
-  existing desktop review screen, so real draft invoices can start
-  within days → the full Odoo module. Or skip the quick button and go
-  straight to the full module?
-- [ ] **25. Saving digit pictures from approved invoices** keeps small
-  pictures of handwritten digits on the server for retraining.
-  They're tiny crops of single digits, not whole invoices, but they are
-  still from real business paperwork. Okay to keep them?
+**The onsite Mac:**
+
+19. **The exact model isn't known yet** — only that it's a MacBook.
+    Chip, macOS version, RAM, and free disk space still need checking
+    on setup day (Apple menu → About This Mac).
+20. **The Mac won't stay switched on all the time**, so Odoo won't
+    always be reachable — but there should be a clickable shortcut/icon
+    so the person using it never has to open the Terminal to start it.
+21. **This MacBook will hold the real, day-to-day Odoo** once handed
+    over — the current WSL test server on the Windows machine is only
+    for building and testing, and nothing from it needs to be migrated
+    across.
+22. **No firm preference on where backups go** — Claude should pick
+    whatever's sensible, with the constraint that it must not slow the
+    Mac down or use excessive disk space for daily use.
+23. **Someone will be onsite with the Mac's admin password on setup
+    day.**
+
+**Decisions:**
+
+24. **Build order: left to Claude's judgment.** Going with the order
+    already suggested — saving digit pictures for retraining, then
+    Total Price, then a quick "send to Odoo" button on the existing
+    desktop review screen (so real draft invoices can start within
+    days), then the full Odoo module — since it gets real value
+    flowing earliest and proves out each piece before the bigger
+    module build.
+25. **Yes, keep the small digit crops from approved invoices for
+    retraining**, as planned.
 
 ## Speed-up: reading a page went from ~11 seconds to ~3 (2026-09-24)
 
