@@ -428,12 +428,13 @@ Kept under the same headings and numbers as before, for reference.
 7. **A row with more returned than delivered should never actually
    happen** — if it does, it means something is wrong further back
    (a misread, or a real paperwork problem) that needs fixing right
-   away, not a normal case to quietly compute an answer for. When it
-   does happen, it should show as a separate note on the invoice
-   (distinct from an ordinary line) rather than being folded in as a
-   negative quantity — and separately, it should stay impossible to
-   miss, since it's meant to be treated as urgent. (The
-   `return_exceeds_quantity` flag added 2026-09-24 already catches most
+   away, not a normal case to quietly compute an answer for. **Decided
+   2026-09-25:** when it does happen, add a plain warning comment on
+   that draft invoice — not a negative invoice line, and not a formal
+   Odoo credit note (a separate document Odoo has for genuine refunds)
+   either. Just a visible note flagging that this row's numbers don't
+   add up and need checking, since it's meant to be treated as urgent.
+   (The `return_exceeds_quantity` flag added 2026-09-24 already catches most
    of these before Approve; this decision covers the rare one that
    still gets approved anyway.)
 8. **Ignore HST/tax entirely for now.** Invoice lines go in exactly as
