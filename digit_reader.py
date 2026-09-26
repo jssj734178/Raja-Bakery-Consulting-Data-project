@@ -205,6 +205,61 @@ STROKE_X_OVERLAP_FRACTION = 0.5
 # one blob -- so this only raises a review flag.
 SPLIT_FRAGMENT_FRACTION = 0.5
 
+# A Total Price cell (e.g. "27.00", "130.0") additionally has a
+# handwritten decimal point, which nothing else on this form does --
+# Qty and Return are always whole numbers. Distinguishing "this small
+# mark is the decimal point" from "this small mark is a leftover
+# fragment of a digit written in disconnected strokes" (the case
+# FRAGMENT_AREA_FRACTION/MIN_FRAGMENT_HEIGHT_FRACTION exist for) comes
+# down to height: a decimal point is a short dot that never reaches
+# anywhere near a digit's height, whereas even a small stroke fragment
+# of a broken-up digit tends to be tall relative to the cell (see
+# MIN_FRAGMENT_HEIGHT_FRACTION's own 0.3 cutoff). A mark shorter than
+# that, and small in area, is read as the decimal point instead of a
+# fragment.
+#
+# Measured against a real decimal point on an actual scan (a clean
+# "29.20" total, PH 416-727-0623 invoice, page 2, row 10): the point
+# itself measured 0.0025 of the cell's area and 0.18 of its height.
+# These thresholds sit comfortably above that measurement (room for a
+# slightly larger dot elsewhere) while staying well under
+# MIN_BLOB_AREA_FRACTION/MIN_BLOB_HEIGHT_FRACTION, so a real digit is
+# never mistaken for the point.
+#
+# NOT actually tuned yet, only unblocked: only one real decimal point has
+# been measured this precisely, and a full run across all 96 real scans
+# in invoices/ found 99% of filled-in Total Price fields getting
+# flagged (mostly ambiguous_decimal_point -- more than one small mark in
+# a cell looks like it could be the point at this threshold). That means
+# these two constants are currently wide enough to avoid the "real point
+# discarded as dust" bug they were raised to fix, but not yet narrow
+# enough to actually distinguish a real point from ordinary stray marks
+# -- the real fix is gathering area/height measurements across many real
+# filled-in Total Price cells (the same way FRAGMENT_AREA_FRACTION and
+# MIN_LONE_DIGIT_HEIGHT_FRACTION below were tuned) and re-setting these
+# from that, not guessing again. See CLAUDE.md, "Where a future session
+# should pick this up," for the concrete next step.
+DECIMAL_POINT_MAX_HEIGHT_FRACTION = 0.25
+DECIMAL_POINT_MAX_AREA_FRACTION = 0.005
+
+# The dust-vs-ink floor segment_digit_blobs() uses (FRAGMENT_AREA_FRACTION)
+# was tuned for Qty/Return cells, where the smallest thing worth keeping
+# is a fragment of a digit. A handwritten decimal point is smaller than
+# that -- the same real "29.20" example measured above (0.0025 of the
+# cell) would be discarded as dust by FRAGMENT_AREA_FRACTION (0.003) and
+# never even reach decimal-point classification. segment_price_blobs()
+# uses this lower floor instead, so a genuine decimal point survives
+# while single-pixel paper grain (measured well under 0.0001 of the
+# cell in the same real cells) still doesn't.
+PRICE_DUST_AREA_FRACTION = 0.0005
+
+# Total Price runs higher than a plain Qty/Return quantity ever does (a
+# bulk order's line total can run into the hundreds of dollars, e.g.
+# 190 x $2.60 = $494.00) and always carries two more digits after the
+# decimal point, so more raw digit characters are expected here than
+# MAX_EXPECTED_DIGITS allows for a plain quantity field.
+MAX_EXPECTED_PRICE_DIGITS = 6
+
 # A blob is claimed by this cell only if at least this fraction of
 # its ink lies inside the cell's own box. The crop is deliberately
 # taken with a generous margin, so ink from the row above or below
@@ -536,6 +591,194 @@ def segment_digit_blobs(cell_bgr: np.ndarray, cell_box: tuple) -> list[np.ndarra
     return [
         (b["mask"][b["y1"]:b["y2"], b["x1"]:b["x2"]]).astype(np.uint8) * 255 for b in blobs
     ], fragment_count
+
+
+def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
+    """
+    Like segment_digit_blobs, but for a Total Price cell, which has a
+    handwritten decimal point that no Qty/Return field ever does (see
+    DECIMAL_POINT_MAX_HEIGHT_FRACTION for how it's told apart from a
+    leftover digit fragment). Kept as its own function rather than an
+    option on segment_digit_blobs so Qty/Return reading -- already
+    checked against real invoices and trusted -- can't be affected by
+    a change made for Total Price.
+
+    Args:
+        cell_bgr, cell_box: same as segment_digit_blobs.
+
+    Returns:
+        (digit_images, decimal_before_count, num_decimal_candidates,
+        fragment_count) -- digit_images is the same as
+        segment_digit_blobs's return (the decimal point itself is never
+        included in it, since it isn't a digit); decimal_before_count
+        is how many of those digit images sit to the left of the
+        decimal point, meaningful only when num_decimal_candidates == 1
+        (classify_price treats 0 or >1 as a review flag rather than
+        guessing); fragment_count is as in segment_digit_blobs.
+    """
+    cell_width = cell_box[2] - cell_box[0]
+    cell_height = cell_box[3] - cell_box[1]
+
+    ink = _remove_printed_lines(
+        threshold_cell(cell_bgr, cell_height), cell_width, cell_height
+    )
+    ink = _owned_ink(ink, cell_box)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    cell_area = cell_width * cell_height
+
+    blobs = []
+    for label in range(1, num_labels):  # label 0 is the background
+        bx, by, bw, bh, area = stats[label]
+        # A lower floor than segment_digit_blobs' FRAGMENT_AREA_FRACTION
+        # -- a genuine decimal point is smaller than what that constant
+        # treats as "dust" (see PRICE_DUST_AREA_FRACTION).
+        if area < PRICE_DUST_AREA_FRACTION * cell_area:
+            continue
+        blobs.append(
+            {"x1": bx, "y1": by, "x2": bx + bw, "y2": by + bh,
+             "area": area, "mask": labels == label}
+        )
+
+    blobs = _merge_stroke_fragments(blobs)
+
+    def is_digit(blob):
+        return (
+            blob["area"] >= MIN_BLOB_AREA_FRACTION * cell_area
+            or (blob["y2"] - blob["y1"]) >= MIN_BLOB_HEIGHT_FRACTION * cell_height
+        )
+
+    def is_decimal_point(blob):
+        return (
+            blob["area"] <= DECIMAL_POINT_MAX_AREA_FRACTION * cell_area
+            and (blob["y2"] - blob["y1"]) <= DECIMAL_POINT_MAX_HEIGHT_FRACTION * cell_height
+        )
+
+    def is_stroke_sized(blob):
+        return (blob["y2"] - blob["y1"]) >= MIN_FRAGMENT_HEIGHT_FRACTION * cell_height
+
+    decimal_candidates = [b for b in blobs if is_decimal_point(b)]
+    digit_blobs = [b for b in blobs if is_digit(b) and not is_decimal_point(b)]
+    other_blobs = [b for b in blobs if not is_digit(b) and not is_decimal_point(b)]
+
+    fragment_count = sum(1 for b in other_blobs if is_stroke_sized(b))
+
+    # A short mark with nothing beside it isn't read as a digit -- see
+    # MIN_LONE_DIGIT_HEIGHT_FRACTION.
+    if len(digit_blobs) == 1 and (digit_blobs[0]["y2"] - digit_blobs[0]["y1"]) < MIN_LONE_DIGIT_HEIGHT_FRACTION * cell_height:
+        fragment_count += is_stroke_sized(digit_blobs[0])
+        digit_blobs = []
+
+    digit_blobs.sort(key=lambda b: (b["x1"] + b["x2"]) / 2)
+
+    decimal_before_count = None
+    if len(decimal_candidates) == 1:
+        point_x = (decimal_candidates[0]["x1"] + decimal_candidates[0]["x2"]) / 2
+        decimal_before_count = sum(
+            1 for b in digit_blobs if (b["x1"] + b["x2"]) / 2 < point_x
+        )
+
+    digit_images = [
+        (b["mask"][b["y1"]:b["y2"], b["x1"]:b["x2"]]).astype(np.uint8) * 255 for b in digit_blobs
+    ]
+    return digit_images, decimal_before_count, len(decimal_candidates), fragment_count
+
+
+def classify_price(
+    digit_blobs: list, decimal_before_count, num_decimal_candidates: int,
+    fragment_count: int, model: DigitCNN, device,
+) -> dict:
+    """
+    The Total Price equivalent of classify_blobs(): reads already-
+    segmented digit blobs plus where the decimal point landed, and
+    turns them into a dollar amount.
+
+    Args:
+        digit_blobs, fragment_count: as classify_blobs().
+        decimal_before_count, num_decimal_candidates: as returned by
+            segment_price_blobs().
+        model, device: as classify_blobs().
+
+    Returns:
+        A dict:
+          - "value": float or None. Unlike Qty/Return, a blank cell is
+            NOT read as 0 here -- every filled-in Qty row's Total Price
+            box had something written in it in every real scan checked
+            so far (see CLAUDE.md's "Checked against 7 real scans"), so
+            a genuinely blank one is unexpected and worth a person's
+            attention rather than a silent assumption of $0.
+          - "digits", "digit_confidences": as classify_blobs(), for the
+            digit images only -- the decimal point is never included,
+            since it isn't a 0-9 class and must never be banked as one.
+          - "flagged", "flag_reasons": as classify_blobs(), plus
+            "no_decimal_point" (none of the segmented marks looked like
+            one) and "ambiguous_decimal_point" (more than one did).
+    """
+    if not digit_blobs:
+        reasons = ["unreadable_ink"] if fragment_count else []
+        return {
+            "value": None,
+            "digits": [],
+            "digit_confidences": [],
+            "flagged": bool(reasons),
+            "flag_reasons": reasons,
+        }
+
+    flag_reasons = []
+    if len(digit_blobs) > MAX_EXPECTED_PRICE_DIGITS:
+        flag_reasons.append("too_many_blobs")
+    if any(blob.shape[1] / blob.shape[0] > MAX_SINGLE_DIGIT_ASPECT_RATIO for blob in digit_blobs):
+        flag_reasons.append("possible_merged_digits")
+
+    tallest = max(blob.shape[0] for blob in digit_blobs)
+    if fragment_count or any(
+        blob.shape[0] < SPLIT_FRAGMENT_FRACTION * tallest
+        and blob.shape[1] < SPLIT_FRAGMENT_FRACTION * tallest
+        for blob in digit_blobs
+    ):
+        flag_reasons.append("possible_split_digit")
+
+    digits = []
+    confidences = []
+    with torch.no_grad():
+        for blob in digit_blobs:
+            tensor = _preprocess_blob(blob).to(device)
+            logits = model(tensor)
+            probs = F.softmax(logits, dim=1)
+            confidence, predicted = probs.max(dim=1)
+            digits.append(str(predicted.item()))
+            confidences.append(confidence.item())
+
+    if any(c < LOW_CONFIDENCE_THRESHOLD for c in confidences):
+        flag_reasons.append("low_confidence")
+
+    if num_decimal_candidates == 0:
+        flag_reasons.append("no_decimal_point")
+        value = float("".join(digits))
+    elif num_decimal_candidates > 1:
+        flag_reasons.append("ambiguous_decimal_point")
+        value = float("".join(digits))
+    else:
+        whole = "".join(digits[:decimal_before_count]) or "0"
+        frac = "".join(digits[decimal_before_count:]) or "0"
+        value = float(f"{whole}.{frac}")
+
+    return {
+        "value": value,
+        "digits": digits,
+        "digit_confidences": confidences,
+        "flagged": len(flag_reasons) > 0,
+        "flag_reasons": flag_reasons,
+    }
+
+
+def read_price(cell_bgr: np.ndarray, cell_box: tuple, model: DigitCNN, device) -> dict:
+    """
+    Read a full Total Price out of one cell crop in one call -- the
+    Total Price equivalent of read_number(). See segment_price_blobs()
+    and classify_price() for the two halves this combines.
+    """
+    return classify_price(*segment_price_blobs(cell_bgr, cell_box), model, device)
 
 
 def prepare_digit_image(blob: np.ndarray) -> np.ndarray:

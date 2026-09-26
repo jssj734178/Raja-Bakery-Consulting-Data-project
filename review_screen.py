@@ -5,14 +5,26 @@ and approves it.
 
 Shows one invoice at a time, reading extractions/<invoice_name>/ --
 results.json plus its crops/ folder -- both already produced by
-extract_invoice.py. EVERY quantity and return field is shown and is
-editable, not just the ones the software flagged, because a flagged-only
-screen would miss a confident misread: the model is only about 94%
-accurate per digit, and when it's wrong it's often wrong confidently, so
-nothing flags it (see CLAUDE.md, "How much gets reviewed"). A field the
-software did flag is shown with a pink background and a plain-language
-note of why, so the reviewer knows to look at those first -- but it's
-still just as editable as any other field.
+extract_invoice.py. EVERY quantity, return, and Total Price field is
+shown and is editable, not just the ones the software flagged, because a
+flagged-only screen would miss a confident misread: the model is only
+about 94% accurate per digit, and when it's wrong it's often wrong
+confidently, so nothing flags it (see CLAUDE.md, "How much gets
+reviewed"). A field the software did flag is shown with a pink
+background and a plain-language note of why, so the reviewer knows to
+look at those first -- but it's still just as editable as any other
+field.
+
+Total Price is the handwritten dollar amount for that row; a live Unit
+Price (Total Price divided by line quantity) is shown alongside it,
+recalculating as either is edited -- see CLAUDE.md, "Pricing decision
+reversed" for why the price that ends up on the Odoo invoice line comes
+from the invoice's own handwriting rather than a price list. Reading
+Total Price is newer and less proven than Qty/Return, and its decimal
+point in particular is genuinely hard to find automatically (the mark
+itself is often just 1-2 pixels), so it flags far more often than
+Qty/Return does right now -- expect to check most filled-in Total Price
+fields for a while, not just the flagged ones.
 
 The customer field is one editable dropdown covering both required ways
 of setting it: pick from customers.json's regular list, or type a name
@@ -33,18 +45,19 @@ flagged) next to that invoice's results.json -- reading that file and
 pushing it into Odoo is a separate piece, built separately.
 
 Approving also banks digit pictures for future retraining: for every
-Qty/Return field the reviewer leaves BOTH unflagged and unchanged from
-what the software originally read, its individual digit crops (already
-saved by extract_invoice.py into digit_crops/, one small picture per
-digit, in the model's own predicted label) are copied into
-digit_bank/<digit>/ at the project root. Leaving a field alone is a
-strong signal the model's read of it was actually right, so this
-builds a growing pile of free labeled training data with nobody having
-to hand-label anything new -- see CLAUDE.md, "Banking verified-correct
-crops as future training data". A field the reviewer corrected is
-skipped: if the software had mis-split the digits in the first place,
-the corrected number can't always be cleanly matched back onto which
-individual digit picture was wrong.
+Qty/Return/Total Price field the reviewer leaves BOTH unflagged and
+unchanged from what the software originally read, its individual digit
+crops (already saved by extract_invoice.py into digit_crops/, one small
+picture per digit, in the model's own predicted label) are copied into
+digit_bank/<digit>/ at the project root -- for Total Price, only the
+actual digit crops, never the decimal point itself, since it isn't a
+0-9 class. Leaving a field alone is a strong signal the model's read of
+it was actually right, so this builds a growing pile of free labeled
+training data with nobody having to hand-label anything new -- see
+CLAUDE.md, "Banking verified-correct crops as future training data". A
+field the reviewer corrected is skipped: if the software had mis-split
+the digits in the first place, the corrected number can't always be
+cleanly matched back onto which individual digit picture was wrong.
 
 Controls are mouse-driven (unlike label_tool.py / calibrate_template.py's
 keyboard shortcuts) since this screen is meant for day-to-day use by
@@ -102,6 +115,10 @@ FLAG_EXPLANATIONS = {
     "low_confidence": "the software wasn't confident about a digit here",
     "leading_zero_digit": "an extra mark was read as a \"0\" in front of the real number -- it didn't change the number shown, but the mark itself should be checked",
     "return_exceeds_quantity": "the return read here is bigger than the quantity ordered -- usually a misread, e.g. the printed price next door read as a number",
+    "no_decimal_point": "no decimal point was found in this box -- a Total Price should always have one (e.g. \"27.00\")",
+    "ambiguous_decimal_point": "more than one mark in this box looked like it could be the decimal point, so the software isn't sure which one is real",
+    "total_price_without_quantity": "a Total Price was read here, but this row's Qty minus Return isn't a positive number, so a unit price couldn't be worked out",
+    "quantity_without_total_price": "this row has a quantity but no Total Price was read here -- every filled-in row should have one",
     "border_not_detected": "the software couldn't find the printed table on this scan",
     "aspect_ratio_mismatch": "the detected table doesn't look like the usual form -- possibly a bad or crooked scan",
 }
@@ -328,16 +345,48 @@ class ReviewScreen:
         qty_var = tk.StringVar(value=str(existing["quantity"] if existing else row["quantity"]))
         ret_var = tk.StringVar(value=str(existing["return"] if existing else row["return"]))
         line_var = tk.StringVar()
+        unit_price_var = tk.StringVar()
+
+        # .get(...), not row[...], so a results.json written before
+        # Total Price reading existed still loads (as a blank, editable
+        # field) instead of raising a KeyError.
+        original_total_price = row.get("total_price")
+        existing_total_price = existing.get("total_price") if existing else None
+        total_price_value = existing_total_price if existing is not None else original_total_price
+        total_price_var = tk.StringVar(
+            value=f"{total_price_value:.2f}" if total_price_value is not None else ""
+        )
 
         def recompute(*_args):
-            """Keep the displayed line quantity matched to whatever is currently typed, even mid-edit."""
+            """
+            Keep the displayed line quantity and unit price matched to
+            whatever is currently typed, even mid-edit. Unit price is
+            derived (Total Price / line quantity, see CLAUDE.md's
+            "Pricing decision reversed") rather than typed directly --
+            editing either Qty/Return or Total Price updates it live.
+            """
             try:
-                line_var.set(str(int(qty_var.get()) - int(ret_var.get())))
+                qty, ret = int(qty_var.get()), int(ret_var.get())
+                line_var.set(str(qty - ret))
             except ValueError:
                 line_var.set("?")  # mid-edit / not a whole number yet -- resolved at save time
+                unit_price_var.set("-")
+                return
+
+            typed_total_price = total_price_var.get().strip()
+            try:
+                total_price = float(typed_total_price) if typed_total_price else None
+            except ValueError:
+                unit_price_var.set("?")
+                return
+            if total_price is not None and qty - ret > 0:
+                unit_price_var.set(f"{total_price / (qty - ret):.2f}")
+            else:
+                unit_price_var.set("-")
 
         qty_var.trace_add("write", recompute)
         ret_var.trace_add("write", recompute)
+        total_price_var.trace_add("write", recompute)
         recompute()
 
         self._build_field(
@@ -350,26 +399,37 @@ class ReviewScreen:
             crop_path=os.path.join(invoice_dir, "crops", f"row{row_index:02d}_return.png"),
             var=ret_var, flags=row["return_flags"],
         )
+        self._build_field(
+            frame, col=3, label="Total $",
+            crop_path=os.path.join(invoice_dir, "crops", f"row{row_index:02d}_total_price.png"),
+            var=total_price_var, flags=row.get("total_price_flags", []),
+        )
 
         line_frame = tk.Frame(frame)
-        line_frame.grid(row=0, column=3, rowspan=2, sticky="n", padx=(12, 6), pady=4)
+        line_frame.grid(row=0, column=4, rowspan=2, sticky="n", padx=(12, 6), pady=4)
         tk.Label(line_frame, text="Line qty", font=("Helvetica", 9, "bold")).pack(anchor="w")
         tk.Label(line_frame, textvariable=line_var, font=("Helvetica", 11, "bold")).pack(anchor="w")
+        tk.Label(line_frame, text="Unit $", font=("Helvetica", 9, "bold")).pack(anchor="w", pady=(6, 0))
+        tk.Label(line_frame, textvariable=unit_price_var, font=("Helvetica", 11, "bold")).pack(anchor="w")
 
         self.row_widgets.append({
             "row_index": row_index,
             "product_name": row["product_name"],
             "qty_var": qty_var,
             "ret_var": ret_var,
+            "total_price_var": total_price_var,
             "original_quantity": row["quantity"],
             "original_return": row["return"],
+            "original_total_price": original_total_price,
             "quantity_was_flagged": bool(row["quantity_flags"]),
             "return_was_flagged": bool(row["return_flags"]),
+            "total_price_was_flagged": bool(row.get("total_price_flags")),
             # .get(..., []), not [row[...]], so a results.json written
             # before digit-crop saving existed still loads instead of
             # raising a KeyError -- it just has nothing to bank.
             "quantity_digit_crops": row.get("quantity_digit_crops", []),
             "return_digit_crops": row.get("return_digit_crops", []),
+            "total_price_digit_crops": row.get("total_price_digit_crops", []),
         })
 
     def _build_field(self, parent: tk.Frame, col: int, label: str, crop_path: str, var: tk.StringVar, flags: list):
@@ -528,13 +588,42 @@ class ReviewScreen:
                 )
                 return
 
+            # Total Price is left blank for a genuinely blank row (see
+            # digit_reader.classify_price -- unlike Qty/Return, a blank
+            # Total Price is never assumed to mean $0), so an empty
+            # field here is valid and means "no total price."
+            typed_total_price = w["total_price_var"].get().strip()
+            try:
+                total_price = float(typed_total_price) if typed_total_price else None
+                if total_price is not None and total_price < 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid value",
+                    f"'{w['product_name']}' has a Total Price that isn't a number of "
+                    f"0 or more (or blank). Fix it before approving.",
+                )
+                return
+
+            line_quantity = qty - ret
+            unit_price = round(total_price / line_quantity, 2) if total_price is not None and line_quantity > 0 else None
+
             # Bank a field's digits only when it's both unflagged and
             # left exactly as the software read it -- see module
-            # docstring for why a corrected field is skipped.
+            # docstring for why a corrected field is skipped. Total
+            # Price is compared rounded to cents, since that's the
+            # precision the field is displayed and edited at.
             if not w["quantity_was_flagged"] and qty == w["original_quantity"]:
                 self._bank_digit_crops(invoice_dir, invoice_name, w["quantity_digit_crops"])
             if not w["return_was_flagged"] and ret == w["original_return"]:
                 self._bank_digit_crops(invoice_dir, invoice_name, w["return_digit_crops"])
+            original_total_price = w["original_total_price"]
+            total_price_unchanged = (
+                total_price == original_total_price if original_total_price is None or total_price is None
+                else round(total_price, 2) == round(original_total_price, 2)
+            )
+            if not w["total_price_was_flagged"] and total_price_unchanged:
+                self._bank_digit_crops(invoice_dir, invoice_name, w["total_price_digit_crops"])
 
             rows_out.append({
                 "row_index": w["row_index"],
@@ -545,7 +634,11 @@ class ReviewScreen:
                 "return": ret,
                 "original_return": w["original_return"],
                 "return_was_flagged": w["return_was_flagged"],
-                "line_quantity": qty - ret,
+                "line_quantity": line_quantity,
+                "total_price": total_price,
+                "original_total_price": original_total_price,
+                "total_price_was_flagged": w["total_price_was_flagged"],
+                "unit_price": unit_price,
             })
 
         review = {

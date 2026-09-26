@@ -8,22 +8,23 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 
 | File | Total lines | Code lines | Comment/docstring lines | Blank lines |
 |---|---|---|---|---|
-| `alignment.py` | 467 | 131 | 290 | 46 |
+| `alignment.py` | 522 | 149 | 323 | 50 |
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
+| `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 721 | 194 | 466 | 61 |
-| `extract_invoice.py` | 625 | 268 | 298 | 59 |
+| `digit_reader.py` | 954 | 303 | 562 | 89 |
+| `extract_invoice.py` | 641 | 288 | 294 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
 | `model.py` | 122 | 22 | 84 | 16 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 620 | 309 | 244 | 67 |
+| `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **4379** | **1765** | **2105** | **509** |
+| **Total** | **4960** | **2063** | **2329** | **568** |
 
-*Last updated: 2026-09-25.*
+*Last updated: 2026-09-26.*
 
 ## What this is
 
@@ -69,11 +70,12 @@ The code and the notes below use some standard image-processing words. In this p
 | **aspect ratio** | How wide something is compared to how tall. Above 1 means wider than tall. |
 | **confidence** | How sure the model is about a digit it just read, from 0 to 1. Low confidence is treated as "don't trust this". |
 | **flag** | A marker on a field meaning "a person should check this before it is trusted". The field still gets a best-guess value. |
-| **calibration** | The one-time recording of where every Qty and Return box sits on the form, saved in `template_calibration.json`. |
+| **calibration** | The one-time recording of where every Qty, Return, and Total Price box sits on the form, saved in `template_calibration.json`. |
 
-1. **[alignment.py](alignment.py)** — shared geometry, used by every other file in this pipeline. `detect_border_corners()` finds the invoice table's outer grid border on a scan (see the detailed fix writeup below for how its precision was hardened). `proportion_to_pixel()`/`pixel_to_proportion()` convert between actual pixel coordinates and proportions of that border (bilinear interpolation across the border's 4 corners), which is the mechanism that lets one calibration be reused on any new scan regardless of exactly where/how big its own border lands. `validate_aspect_ratio()` is the reliability guard — flags a scan whose detected border shape doesn't plausibly match the calibrated template, rather than proceeding with bad coordinates.
+1. **[alignment.py](alignment.py)** — shared geometry, used by every other file in this pipeline. `detect_border_corners()` finds the invoice table's outer grid border on a scan (see the detailed fix writeup below for how its precision was hardened). `proportion_to_pixel()`/`pixel_to_proportion()` convert between actual pixel coordinates and proportions of that border (bilinear interpolation across the border's 4 corners), which is the mechanism that lets one calibration be reused on any new scan regardless of exactly where/how big its own border lands. `validate_aspect_ratio()` is the reliability guard — flags a scan whose detected border shape doesn't plausibly match the calibrated template, rather than proceeding with bad coordinates. `ruled_line_positions()` finds a form's printed straight lines in an already-thresholded picture (isolating anything that runs straight for long enough that handwriting never qualifies) — shared by `extract_invoice.py` (snapping a cell box onto its real edges on a new scan) and `calibrate_total_price.py` (finding the Total Price column's own divider once, during calibration).
 2. **[calibrate_template.py](calibrate_template.py)** — one-time interactive tkinter tool (same drag-box / keypress-confirm / zoom / pan / undo conventions as `label_tool.py`) for recording each row's Qty and Return cell positions as proportions of the detected border. Run once against any representative scan of the fixed template (a filled-in invoice is fine — only the printed ruled-line geometry matters). Saves `template_calibration.json` (not gitignored, unlike the training pipeline's generated outputs — it holds only template geometry, not business data) plus a `product_rows.json` skeleton for hand-filling in each row's product name afterward, matched by row position — deliberately never overwritten by re-running calibration, so hand-edited product names are never at risk of being clobbered. **A row was skipped during the actual calibration session — see "Known issues" below.**
-3. **[digit_reader.py](digit_reader.py)** — takes the small picture of one Qty or Return box and works out what number is handwritten in it.
+3. **[calibrate_total_price.py](calibrate_total_price.py)** — a second, smaller calibration tool that adds a `total_price_box` to every row of an already-calibrated `template_calibration.json`. Unlike `calibrate_template.py`, this one isn't interactive: it finds the Total Price column's own left divider automatically (the column's right edge needs no detection at all — it's simply the table's own outer border, since Total Price is the rightmost column with nothing printed after it), then saves a preview image of a few real rows so the result can still be checked by eye before being trusted. Run once, after `calibrate_template.py`; see "Reading Total Price and deriving unit price" below for how this was verified.
+4. **[digit_reader.py](digit_reader.py)** — takes the small picture of one Qty, Return, or Total Price box and works out what number is handwritten in it.
 
    It works through the picture in steps, and the order matters because each step depends on the one before:
 
@@ -89,14 +91,18 @@ The code and the notes below use some standard image-processing words. In this p
    Finally it decides whether the answer can be trusted, using several separate checks that deliberately overlap, so a problem missed by one is usually caught by another: more than 3 digits found (real quantities on this form aren't bigger than that); a piece of ink far wider than it is tall (usually two digits touching and being read as one); a leftover stroke (usually a digit written in disconnected pieces); or the model itself not being confident about a digit (which also catches scribbles and crossings-out that aren't digits at all).
 
    A flagged field still gets the best answer the software could manage rather than being left empty. The flag means "a person should look at this before trusting it", not "nothing could be read".
-4. **[extract_invoice.py](extract_invoice.py)** — runs one whole invoice from start to finish: find the table's outer border on the new scan, check the border is a sensible shape (if not, the whole invoice is set aside for manual handling), then for every row cut out the Qty box and the Return box, read each one, and subtract Return from Qty. It writes `results.json` plus a picture of every single box — flagged or not — into `extractions/<invoice_name>/`, because the human review screen will need to show a picture of any field a person wants to check. Run with `python extract_invoice.py path/to/scan.png`, or give it several scans at once, e.g. `python extract_invoice.py invoices/*.png`. A batch is much faster than running it once per scan, because the ~20-second startup is only paid once (see "Speed-up" below).
+
+   A Total Price box goes through the same steps, plus one more: finding the handwritten decimal point, which nothing else on this form has. See "Reading Total Price and deriving unit price" below for how that part works and how solid it currently is (less proven than the rest of this list).
+5. **[extract_invoice.py](extract_invoice.py)** — runs one whole invoice from start to finish: find the table's outer border on the new scan, check the border is a sensible shape (if not, the whole invoice is set aside for manual handling), then for every row cut out the Qty box and the Return box, read each one, and subtract Return from Qty. It writes `results.json` plus a picture of every single box — flagged or not — into `extractions/<invoice_name>/`, because the human review screen will need to show a picture of any field a person wants to check. Run with `python extract_invoice.py path/to/scan.png`, or give it several scans at once, e.g. `python extract_invoice.py invoices/*.png`. A batch is much faster than running it once per scan, because the ~20-second startup is only paid once (see "Speed-up" below).
 
    Three things this file does are worth explaining, because they look odd until you know why:
 
    - **It straightens each box before cutting it out.** These scans sit about 1.4 degrees crooked. That sounds tiny, but across the width of one box a "horizontal" printed line drifts down by about 26 pixels, while the line itself is only about 7 pixels thick — so the line is nowhere near level, and the step that erases printed lines simply fails on a crooked picture. Straightening costs nothing extra, because the tilt can be worked out from the corners of the box we already calculated.
    - **Each box is cut out twice, at two different sizes.** The copy used for *reading* is deliberately too big, taking in a whole row's height above and below. That seems wrong, but step 4 above needs to see a neighbouring row's digit in full to judge that it belongs to that row and not this one — if it's cut off at the edge of the picture, the visible sliver can look like it belongs here, and that is exactly why blank boxes used to be read as numbers. The copy *saved for a person to look at* is kept tight and tidy.
    - **It nudges each box's edges inwards onto the printed lines it can actually see on this scan.** The saved calibration reliably says *which* box we want, but not its exact position on every scan. On about a third of pages tested, the Return box reached past the column divider and swallowed the printed price in the next column, so "$4.00" was being read as that row's return quantity — quietly, on nearly every row of the page. The nudge only ever makes a box smaller, never bigger: allowing it to grow outwards turned a correctly-read "50" into "501".
-5. **[review_screen.py](review_screen.py)** — the screen a person uses to check, correct, assign a customer to, and approve one invoice's extraction before anything goes to Odoo. Reads `results.json` and `crops/` from `extractions/<invoice_name>/` (both already produced by `extract_invoice.py`, above). Shows every row — not just flagged ones — with the product name, an editable box for its Qty and Return values, and a line quantity (Qty minus Return) that recalculates live as those are edited. A field the software flagged gets a pink background, a plain-language reason, and its crop image so the reason can be checked against the actual handwriting; an unflagged field skips the image (see "The human review screen" below for why) but stays just as editable. The customer picker at the top is one control doing both jobs the requirements called for: its dropdown offers the saved customer list, and it also accepts typing any name that isn't on it — and a typed name that does match one on the list (ignoring case/whitespace) is folded onto that customer's exact listed spelling rather than kept as separately-typed text. Approving an invoice writes `review.json` next to its `results.json` — the chosen customer, and every row's corrected value kept alongside what the software originally read, so a correction stays visible as a correction rather than overwriting the record of it. Deliberately does not talk to Odoo itself. Run with `python review_screen.py`, or `python review_screen.py "invoice folder name"` to open a specific invoice first.
+
+   Every row's Total Price box goes through this same crop/straighten/nudge treatment, and its own reading gets divided by that row's line quantity to get a unit price — see "Reading Total Price and deriving unit price" below.
+6. **[review_screen.py](review_screen.py)** — the screen a person uses to check, correct, assign a customer to, and approve one invoice's extraction before anything goes to Odoo. Reads `results.json` and `crops/` from `extractions/<invoice_name>/` (both already produced by `extract_invoice.py`, above). Shows every row — not just flagged ones — with the product name, editable boxes for its Qty, Return, and Total Price values, a line quantity (Qty minus Return) and a unit price (Total Price ÷ line quantity), both recalculating live as those are edited. A field the software flagged gets a pink background, a plain-language reason, and its crop image so the reason can be checked against the actual handwriting; an unflagged field skips the image (see "The human review screen" below for why) but stays just as editable. The customer picker at the top is one control doing both jobs the requirements called for: its dropdown offers the saved customer list, and it also accepts typing any name that isn't on it — and a typed name that does match one on the list (ignoring case/whitespace) is folded onto that customer's exact listed spelling rather than kept as separately-typed text. Approving an invoice writes `review.json` next to its `results.json` — the chosen customer, and every row's corrected value kept alongside what the software originally read, so a correction stays visible as a correction rather than overwriting the record of it. Deliberately does not talk to Odoo itself. Run with `python review_screen.py`, or `python review_screen.py "invoice folder name"` to open a specific invoice first.
 
 ## The human review screen: requirements and decisions
 
@@ -314,14 +320,135 @@ by hand before committing to this, not just assumed:**
   the Return-into-Unit-Price problem described below, its box has
   nothing to spill into except the table's own edge.
 
-**What this adds to the pipeline (not yet built):** a `total_price` box
-per row in `template_calibration.json`; decimal-point handling in
-`digit_reader.py` (new — nothing today needs to find a decimal point);
-`total_price` and a derived `unit_price` in `results.json`; sanity
-flags (Qty/Return present with no Total or vice versa; a derived price
-far from the row's printed catalog price, allowing normal room for a
-bulk discount); and matching editable fields in `review_screen.py`,
-using its existing per-field pattern (see `_build_field`).
+**Built (2026-09-26): reading Total Price and deriving unit price.**
+Every piece described above as "not yet built" now exists — a
+`total_price_box` per row in `template_calibration.json`, decimal-point
+handling in `digit_reader.py`, `total_price`/`unit_price` in
+`results.json`, sanity flags, and matching editable fields in
+`review_screen.py`. Some of it needs more real-world checking before
+being trusted the way Qty/Return now is — see below for exactly what's
+solid and what isn't.
+
+- **Calibrating the Total Price box didn't need a new interactive
+  tool.** [calibrate_total_price.py](calibrate_total_price.py) finds
+  the column's own left divider automatically (reusing the same
+  "how long is a straight printed line" logic `extract_invoice.py`
+  already uses to snap cell boxes onto real lines, now shared as
+  `alignment.ruled_line_positions`), rather than requiring someone to
+  drag a box by hand for all 24 rows the way `calibrate_template.py`
+  does for Qty/Return. The column's right edge needs no detection at
+  all — it's simply the table's own outer border, since Total Price is
+  the rightmost column with nothing printed after it. Run once, after
+  `calibrate_template.py` has already recorded Qty/Return; safe to
+  re-run, since it only ever touches `total_price_box`. It saves a
+  preview image stacking the computed box against real handwriting on
+  the first, middle, and last row, specifically so the result gets
+  checked against a real scan rather than trusted blind — the same
+  discipline `detect_border_corners()`'s own fix (below) was built and
+  verified with. Already run once against the shipped reference scan;
+  `template_calibration.json` now has `total_price_box` on all 24 rows,
+  verified this way.
+- **Reading a price means finding a decimal point, which nothing else
+  on this form needs.** `digit_reader.segment_price_blobs()` /
+  `classify_price()` are new, separate functions alongside the existing
+  `segment_digit_blobs()`/`classify_blobs()` — kept separate rather than
+  adding a "price mode" flag to the existing ones, so Qty/Return reading
+  (already checked against real invoices and trusted) can't be affected
+  by a change made for this newer, less-proven field. A decimal point is
+  told apart from a leftover digit fragment by being much smaller and
+  shorter — but getting the actual size right took checking a real
+  example: a first-pass guess at the threshold turned out to be *below*
+  where genuine decimal points actually measured (checked against a
+  clean real example — a handwritten "29.20" — whose point measured
+  0.0025 of the cell's area and 0.18 of its height), meaning real
+  decimal points were being discarded as dust before ever being
+  considered, not misclassified. The dust-vs-ink floor `segment_digit_blobs()`
+  uses for Qty/Return (`FRAGMENT_AREA_FRACTION`) turned out to be too
+  high a floor for a price cell's decimal point specifically, so
+  `segment_price_blobs()` uses its own lower one
+  (`PRICE_DUST_AREA_FRACTION`) instead.
+- **Where this stands, honestly — and this is the important part.**
+  Fixing that one bug took Total Price from flagging essentially every
+  filled-in row (`no_decimal_point` on nearly all of them) to correctly
+  reading plain cases with no flag at all — e.g. a handwritten "130.0"
+  now reads as `130.0` cleanly, and several rows checked against this
+  project's own printed catalog prices came back exactly right (20 ×
+  $3.50 = $70.00, 16 × $4.00 = $64.00). But a full run across all 96
+  real scanned pages in `invoices/` (not just the 2-page spot check
+  that first suggested this was working reasonably) told a worse story:
+  **893 of 903 filled-in Total Price fields — 99% — get flagged.**
+  `ambiguous_decimal_point` alone accounts for 466 of those (more than
+  one small mark in the box looks like it could be the point, now that
+  the lowered dust floor lets more small ink through), with
+  `no_decimal_point` (109), `possible_merged_digits`, and
+  `possible_split_digit` making up most of the rest. Nothing crashed
+  and no wrong number reached Odoo silently — every flagged field still
+  gets a best-effort value and stays fully editable in `review_screen.py`
+  with its crop shown, same safety net as everywhere else in this
+  pipeline — but as a REVIEW SIGNAL, the Total Price flag is currently
+  close to meaningless: at a 99% flag rate it no longer distinguishes
+  "check this one" from "this one's fine" the way Qty/Return's ~39%
+  rate does. **Treat every filled-in Total Price field as needing a
+  look, full stop, until this gets the same kind of real-measurement
+  tuning pass every Qty/Return threshold already went through** (see
+  `FRAGMENT_AREA_FRACTION`, `MIN_LONE_DIGIT_HEIGHT_FRACTION`, etc. in
+  `digit_reader.py` for what that process looks like — each was tuned
+  against hundreds of real measured blobs, not one or two examples).
+  Total Price has only been checked against a handful of real examples
+  so far.
+- **What `results.json` and `review_screen.py` now carry.** Each row
+  gets `total_price` (float or `null` — a blank Total Price is never
+  assumed to mean $0.00 the way a blank Qty/Return is assumed to mean
+  0, since every filled-in Qty row's Total Price box had something
+  written in it in every real scan checked so far, so a genuinely blank
+  one is unexpected) and a derived `unit_price` (`total_price ÷ line
+  quantity`, `null` if that division isn't sensible — flagged instead
+  as `total_price_without_quantity` or `quantity_without_total_price`).
+  `review_screen.py` shows Total Price as a fourth editable field per
+  row (same flagged/pink-background/crop-image treatment as Qty/Return)
+  plus a live-recalculating Unit $ display, and Approve banks its
+  digit crops the same way Qty/Return's are banked — never the decimal
+  point itself, since it isn't a 0-9 class.
+- **Not built yet:** a sanity flag comparing the derived unit price
+  against each product's own printed catalog price (the plan named this
+  when it was first written up, above) — doing that needs the catalog
+  prices themselves recorded somewhere (`product_rows.json` only has
+  product names today), which hasn't been gathered from Jagbir yet.
+
+**Where a future session should pick this up (left off 2026-09-26).**
+Priority, in order:
+
+1. **Tune the decimal-point detection against real measurements before
+   touching anything else in the Odoo build.** A 99% flag rate means
+   Total Price isn't usably automated yet, and shipping the Odoo push
+   on top of it would mean every single line's price needs a human
+   look anyway — not the point of automating this. The next step
+   (already scoped, not yet run to completion) is to gather actual
+   area/height measurements of every non-digit-sized blob inside real,
+   filled-in Total Price cells across a broad sample of the 96 real
+   scans, the same way `FRAGMENT_AREA_FRACTION` and the other
+   `digit_reader.py` constants were originally tuned (see their own
+   comments for that process) — looking for where genuine decimal
+   points and genuine stray marks/paper-grain actually separate in
+   size, rather than guessing a threshold from one or two examples the
+   way the current `DECIMAL_POINT_MAX_AREA_FRACTION`/
+   `DECIMAL_POINT_MAX_HEIGHT_FRACTION` were set. A measurement script
+   for this was half-built this session
+   (`segment_price_blobs`/`classify_price` themselves are done and
+   correct — it's specifically these two thresholds that need
+   real-data tuning) but not run to a conclusion; picking it back up
+   just means gathering that real measurement and re-tuning, not
+   redesigning the mechanism.
+2. Once Total Price reads cleanly enough that its flag rate is
+   actually informative (in the same ballpark as Qty/Return's ~39%,
+   not necessarily identical), the remaining build order from before
+   still holds: a quick "send to Odoo" button on `review_screen.py`,
+   then the full Odoo module (see "Decisions" above for why that
+   order).
+3. The catalog-price sanity flag noted just above is worth adding
+   alongside step 1, if/when Jagbir provides catalog prices per
+   product — it would independently help spot a bad Total Price read
+   too, not just serve as its own feature.
 
 ## The Odoo server this will actually run on (checked 2026-09-23)
 
@@ -363,11 +490,14 @@ Windows machine):
   installable that way, since it's currently loose top-level scripts
   that import each other directly.
 
-**Status as of 2026-09-25: still not yet built, but everything blocking
-the start of the build is now answered** (see "Answers from Jagbir
-(2026-09-25)" below). The plan (saving digit pictures for retraining →
-Total Price → a quick desktop "send to Odoo" button → the full Odoo
-module) can now start from scratch in a future session.
+**Status as of 2026-09-26:** saving digit pictures for retraining
+(2026-09-25) is done. Total Price reading / unit price derivation
+(2026-09-26) is built and mostly working, but not yet trustworthy at
+scale — a full 96-page check found 99% of filled-in Total Price fields
+get flagged, so it needs a real-measurement tuning pass before relying
+on it (see "Where a future session should pick this up," above) —
+that's the next priority, ahead of the desktop "send to Odoo" button
+and the full Odoo module.
 
 ## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 

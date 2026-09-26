@@ -53,6 +53,12 @@ extractions/
 # and regenerable (by re-approving invoices) rather than a one-off.
 digit_bank/
 
+# Verification preview saved by calibrate_total_price.py -- a crop of
+# real handwriting off the reference scan, regenerated fresh every time
+# that script runs, so it's the same "real business data, regenerable"
+# case as invoices/ and extractions/ above.
+total_price_calibration_preview.png
+
 # OS-generated junk files
 .DS_Store
 Thumbs.db

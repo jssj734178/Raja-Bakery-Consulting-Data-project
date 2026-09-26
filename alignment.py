@@ -266,6 +266,61 @@ def detect_border_corners(image_bgr: np.ndarray) -> np.ndarray | None:
     return order_corners(np.array([top_left, top_right, bottom_right, bottom_left]))
 
 
+def ruled_line_positions(binary: np.ndarray, axis: int, run_length: int) -> list:
+    """
+    Locate a form's printed ruled lines in an already-deskewed,
+    thresholded image, by isolating strokes that run straight for at
+    least `run_length` pixels -- long enough that handwriting or
+    printed text never qualifies, but a printed ruled line always does.
+
+    Shared by extract_invoice.py (finding a cell's own bounding lines,
+    to snap a calibrated box onto them -- see snap_cell_box) and by
+    calibrate_total_price.py (finding the Total Price column's own left
+    divider once, during calibration) -- both need exactly the same
+    "where are the long straight lines" primitive, just aimed at
+    different crops.
+
+    Args:
+        binary: thresholded image, ink as foreground (255), already
+            deskewed -- a rotated line drifts out of a single
+            column/row over its own length and won't be found by this.
+        axis: 0 to find vertical lines (returning x positions), 1 to
+            find horizontal ones (returning y positions).
+        run_length: how long a straight run has to be to count as a
+            printed line rather than handwriting.
+
+    Returns:
+        The centre position of each detected line, in ascending order.
+        Adjacent columns/rows of the same line are collapsed into one
+        entry -- a printed line is several pixels thick, and what the
+        caller wants is one number per line.
+    """
+    kernel_size = (1, run_length) if axis == 0 else (run_length, 1)
+    lines = cv2.morphologyEx(
+        binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size)
+    )
+
+    # Count ink along each line's own direction, leaving one value per
+    # candidate position, then keep the positions where a line
+    # actually is. Half the run length is a deliberately forgiving
+    # cut: it takes a real line to get near it, but a line broken up
+    # where other rules cross it still clears it.
+    profile = lines.sum(axis=axis) / 255
+    present = profile > run_length / 2
+
+    positions = []
+    start = None
+    for index, is_line in enumerate(present):
+        if is_line and start is None:
+            start = index
+        elif not is_line and start is not None:
+            positions.append((start + index - 1) / 2)
+            start = None
+    if start is not None:
+        positions.append((start + len(present) - 1) / 2)
+    return positions
+
+
 def corner_distances(corners: np.ndarray) -> tuple[float, float]:
     """
     Measure the border's average width and height from its corners.

@@ -1,11 +1,12 @@
 """
 Per-invoice extraction: given a NEW scanned invoice, applies the
 one-time template calibration (template_calibration.json,
-product_rows.json) to locate every row's Qty and Return cells, reads
-each one with digit_reader, subtracts Return from Qty per row, and
-writes out the resulting (product, quantity) pairs plus a per-field
-confidence/flag status -- everything the (not yet built) human review
-step will need to confirm or correct before anything reaches Odoo.
+product_rows.json) to locate every row's Qty, Return, and Total Price
+cells, reads each one with digit_reader, subtracts Return from Qty and
+divides Total Price by that to get a unit price per row, and writes out
+the resulting per-field values plus a per-field confidence/flag status
+-- everything review_screen.py needs to let a person confirm or correct
+before anything reaches Odoo.
 
 Run with:  python extract_invoice.py path/to/new_scan.png [more_scans.png ...]
 (e.g. python extract_invoice.py invoices/*.png for a whole batch).
@@ -23,12 +24,14 @@ import numpy as np
 import torch
 from PIL import Image
 
-from alignment import detect_border_corners, proportion_to_pixel, validate_aspect_ratio
+from alignment import detect_border_corners, proportion_to_pixel, ruled_line_positions, validate_aspect_ratio
 from digit_reader import (
     classify_blobs,
+    classify_price,
     load_model,
     prepare_digit_image,
     segment_digit_blobs,
+    segment_price_blobs,
     threshold_cell,
 )
 
@@ -119,8 +122,12 @@ def _separate_overlapping_boxes(calibration: dict):
         split(row["quantity_box"], 2, row["return_box"], 0)
 
     # Within each column, a row's bottom edge meets the next row's top.
+    # total_price_box only exists once the Total Price column has been
+    # calibrated (see calibrate_total_price.py) -- older calibrations
+    # without it are handled the same way as before.
+    box_keys = [k for k in ("quantity_box", "return_box", "total_price_box") if k in rows[0]]
     for upper, lower in zip(rows, rows[1:]):
-        for box_key in ("quantity_box", "return_box"):
+        for box_key in box_keys:
             split(upper[box_key], 3, lower[box_key], 1)
 
 
@@ -240,49 +247,6 @@ def crop_cell(
     return crop, cell_box
 
 
-def _ruled_line_positions(binary: np.ndarray, axis: int, run_length: int) -> list:
-    """
-    Locate the form's printed ruled lines in a deskewed crop.
-
-    Args:
-        binary: thresholded crop, ink as foreground.
-        axis: 0 to find vertical lines (returning x positions), 1 to
-            find horizontal ones (returning y positions).
-        run_length: how long a straight run has to be to count as a
-            printed line rather than handwriting.
-
-    Returns:
-        The centre position of each detected line, in ascending order.
-        Adjacent columns/rows of the same line are collapsed into one
-        entry -- a printed line is several pixels thick, and what the
-        caller wants is one number per line.
-    """
-    kernel_size = (1, run_length) if axis == 0 else (run_length, 1)
-    lines = cv2.morphologyEx(
-        binary, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size)
-    )
-
-    # Count ink along each line's own direction, leaving one value per
-    # candidate position, then keep the positions where a line
-    # actually is. Half the run length is a deliberately forgiving
-    # cut: it takes a real line to get near it, but a line broken up
-    # where other rules cross it still clears it.
-    profile = lines.sum(axis=axis) / 255
-    present = profile > run_length / 2
-
-    positions = []
-    start = None
-    for index, is_line in enumerate(present):
-        if is_line and start is None:
-            start = index
-        elif not is_line and start is not None:
-            positions.append((start + index - 1) / 2)
-            start = None
-    if start is not None:
-        positions.append((start + len(present) - 1) / 2)
-    return positions
-
-
 def snap_cell_box(crop_bgr: np.ndarray, cell_box: tuple) -> tuple:
     """
     Move a calibrated cell box onto the ruled lines that actually
@@ -338,10 +302,10 @@ def snap_cell_box(crop_bgr: np.ndarray, cell_box: tuple) -> tuple:
     # through the rows above and below too, which the analysis crop
     # includes, so it clears this easily; no digit or printed
     # character does.
-    verticals = _ruled_line_positions(
+    verticals = ruled_line_positions(
         binary, axis=0, run_length=int(height * DIVIDER_MIN_LENGTH_CELL_FRACTION)
     )
-    horizontals = _ruled_line_positions(binary, axis=1, run_length=int(width * 0.5))
+    horizontals = ruled_line_positions(binary, axis=1, run_length=int(width * 0.5))
 
     def snap(edge, centre, candidates, limit):
         """Pull an edge in to the innermost printed line it has crossed."""
@@ -476,7 +440,13 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
             ANALYSIS_VERTICAL_MARGIN_FRACTION,
         )
         cell_box = snap_cell_box(analysis_crop, cell_box)
-        segmented = segment_digit_blobs(analysis_crop, cell_box)
+        # Total Price additionally has a handwritten decimal point that
+        # Qty/Return never do, so it needs its own segmentation pass
+        # (see digit_reader.segment_price_blobs).
+        if field == "total_price":
+            segmented = segment_price_blobs(analysis_crop, cell_box)
+        else:
+            segmented = segment_digit_blobs(analysis_crop, cell_box)
 
         # Saved separately and tighter -- what a reviewer needs to
         # see is not what the reader needs to measure against.
@@ -496,7 +466,16 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
     # Python's lock while it runs, so cells are segmented on all cores
     # at once. The model then reads them one at a time in row order,
     # exactly as before, so results don't depend on thread timing.
-    fields = (("qty", "quantity_box"), ("return", "return_box"))
+    #
+    # total_price_box only exists once the Total Price column has been
+    # calibrated (see calibrate_total_price.py); an older calibration
+    # file without it just skips Total Price/unit price entirely,
+    # rather than this whole pipeline breaking on it.
+    fields = [("qty", "quantity_box"), ("return", "return_box")]
+    has_total_price = all("total_price_box" in row for row in calibration["rows"])
+    if has_total_price:
+        fields.append(("total_price", "total_price_box"))
+
     with ThreadPoolExecutor() as pool:
         segmented = {
             (row["row_index"], field): pool.submit(segment_cell, row, field, box_key)
@@ -513,11 +492,12 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
         # and reused below (for classification AND for saving digit
         # crops), rather than called again per use.
         segmented_by_field = {field: segmented[(row_index, field)].result() for field, _ in fields}
-        results = {
-            field: classify_blobs(*segmented_by_field[field], model, device)
-            for field in segmented_by_field
-        }
+        results = {}
+        for field in segmented_by_field:
+            classify = classify_price if field == "total_price" else classify_blobs
+            results[field] = classify(*segmented_by_field[field], model, device)
         qty_result, return_result = results["qty"], results["return"]
+        total_price_result = results.get("total_price")
 
         # More returned than was ordered is almost never real on this
         # form -- it is what a misread Return box looks like (e.g. the
@@ -534,6 +514,40 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
             segmented_by_field["return"][0], return_result["digits"], digit_crops_dir, row_index, "return"
         )
 
+        # Quantity minus Return, per row -- the actual line-item
+        # quantity (see CLAUDE.md's design notes). Computed even when a
+        # field is flagged, since it's still the best-effort reading;
+        # "flagged" below is what tells a reviewer not to trust it as-is.
+        line_quantity = qty_result["value"] - return_result["value"]
+
+        total_price_value = None
+        total_price_confidences = []
+        total_price_flags = []
+        total_price_digit_crops = []
+        unit_price = None
+        if total_price_result is not None:
+            total_price_value = total_price_result["value"]
+            total_price_confidences = total_price_result["digit_confidences"]
+            total_price_flags = list(total_price_result["flag_reasons"])
+            total_price_digit_crops = _save_digit_crops(
+                segmented_by_field["total_price"][0], total_price_result["digits"],
+                digit_crops_dir, row_index, "total_price",
+            )
+
+            # unit price = Total Price / (Qty - Return) -- see CLAUDE.md,
+            # "Pricing decision reversed" for why this is derived from
+            # the invoice's own handwriting rather than an Odoo price
+            # list. Both halves of the division have to actually be
+            # present and sensible before trusting the result; either
+            # gap gets its own flag rather than a silently wrong number
+            # (a division by zero/negative, or a $0.00 unit price).
+            if total_price_value is not None and line_quantity > 0:
+                unit_price = round(total_price_value / line_quantity, 2)
+            elif total_price_value is not None:
+                total_price_flags.append("total_price_without_quantity")
+            elif qty_result["value"] > 0:
+                total_price_flags.append("quantity_without_total_price")
+
         rows_out.append(
             {
                 "row_index": row_index,
@@ -546,13 +560,13 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
                 "return_confidences": return_result["digit_confidences"],
                 "return_flags": return_result["flag_reasons"],
                 "return_digit_crops": return_digit_crops,
-                # Quantity minus Return, per row -- the actual
-                # line-item quantity (see CLAUDE.md's design notes).
-                # Computed even when a field is flagged, since it's
-                # still the best-effort reading; "flagged" below is
-                # what tells a reviewer not to trust it as-is.
-                "line_quantity": qty_result["value"] - return_result["value"],
-                "flagged": qty_result["flagged"] or return_result["flagged"],
+                "line_quantity": line_quantity,
+                "total_price": total_price_value,
+                "total_price_confidences": total_price_confidences,
+                "total_price_flags": total_price_flags,
+                "total_price_digit_crops": total_price_digit_crops,
+                "unit_price": unit_price,
+                "flagged": qty_result["flagged"] or return_result["flagged"] or bool(total_price_flags),
             }
         )
 
@@ -605,15 +619,18 @@ def _print_result(result: dict, output_dir: str):
         print(f"INVOICE FLAGGED: {result['reason']} -- needs manual handling, no rows extracted.")
         return
 
-    header = f"{'row':>4} {'product':<45} {'qty':>5} {'ret':>4} {'line':>5}  flags"
+    header = f"{'row':>4} {'product':<45} {'qty':>5} {'ret':>4} {'line':>5} {'total':>8} {'unit':>7}  flags"
     print(header)
     print("-" * len(header))
     for row in result["rows"]:
-        flags = ", ".join(row["quantity_flags"] + row["return_flags"])
+        flags = ", ".join(row["quantity_flags"] + row["return_flags"] + row["total_price_flags"])
         marker = "  <-- REVIEW" if row["flagged"] else ""
+        total_price = f"{row['total_price']:.2f}" if row["total_price"] is not None else "-"
+        unit_price = f"{row['unit_price']:.2f}" if row["unit_price"] is not None else "-"
         print(
             f"{row['row_index']:>4} {row['product_name'][:45]:<45} "
-            f"{row['quantity']:>5} {row['return']:>4} {row['line_quantity']:>5}  {flags}{marker}"
+            f"{row['quantity']:>5} {row['return']:>4} {row['line_quantity']:>5} "
+            f"{total_price:>8} {unit_price:>7}  {flags}{marker}"
         )
 
     flagged_count = sum(1 for row in result["rows"] if row["flagged"])
