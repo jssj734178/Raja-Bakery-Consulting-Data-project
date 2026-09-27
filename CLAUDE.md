@@ -12,7 +12,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 1129 | 340 | 693 | 96 |
+| `digit_reader.py` | 1138 | 335 | 707 | 96 |
 | `extract_invoice.py` | 642 | 288 | 295 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
@@ -22,7 +22,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5136** | **2100** | **2461** | **575** |
+| **Total** | **5145** | **2095** | **2475** | **575** |
 
 *Last updated: 2026-09-27.*
 
@@ -580,23 +580,50 @@ drops from 254 to 212 as ties that were never real (one candidate a
 genuine point, the other a residue sliver) resolve cleanly instead of
 being flagged as a tie.
 
-**Where a future session should pick this up (left off 2026-09-27).**
-Total Price's real review burden is now 30.1% of all cells, down from
-43.9% this session and effectively 100% before this session started —
-real progress, but still well above Qty/Return's ~39% OF FILLED
-fields (a much smaller base, since Qty/Return doesn't count blanks
-the same way `total_price` does here). Priority, in order:
+**Fixed (2026-09-27, same session): `possible_split_digit` was a false-
+positive machine, not a real signal, 86% of the time.** It was the
+largest remaining flag (320 of 600 filled cells) after the two fixes
+above, and pulling real examples showed most of them had a perfectly
+correct, catalog-matching read (e.g. `20 × $3.00 = $60.00`) flagged
+anyway. The cause: `classify_price()` copied `classify_blobs()`'s
+(Qty/Return's) check that a digit far smaller than the TALLEST digit
+in the same cell is suspicious -- reasonable for a 1-3 digit quantity
+where all digits are naturally similar in size, but not for a 3-6
+digit dollar amount, where one genuinely tall, thin digit (a "1" is the
+common case) routinely reaches well over double the height of an
+entirely normal neighbour. Measured directly across all 96 scans: of
+every case this check could fire on, 86% (274 of 320) had no leftover
+fragment of ink at all -- the flag was firing purely from that size
+comparison, never from genuine leftover ink. `classify_price()` now
+flags `possible_split_digit` only on an actual leftover fragment
+(`fragment_count`), the same real signal `no_decimal_point` and
+`ambiguous_decimal_point` already rely on elsewhere. Verified: zero
+Qty/Return impact (`classify_blobs()` untouched), and -- unlike the two
+fixes above -- this one changes NO Total Price value at all, only
+which of them get flagged, since it purely removes a flag condition
+rather than touching segmentation. `possible_split_digit` drops from
+320 to 46 fields.
 
-1. **Look at what's left.** `possible_split_digit` didn't drop with
-   this fix (297 → 320, even ticked up slightly) and is now the
-   second-largest flag. Worth the same treatment as the two bugs found
-   this session: pull a handful of real `possible_split_digit`-flagged
-   digit crops and check by eye whether they're genuine broken strokes
-   or another artifact of Total Price's wider cells that Qty/Return
-   doesn't share.
-2. `low_confidence` and `total_price_without_quantity` both fell
-   sharply as a side effect of this session's fixes (387→73, 374→77) —
-   worth confirming that drop holds up rather than assuming it will.
+**Where a future session should pick this up (left off 2026-09-27).**
+Three real bugs fixed this session (decimal-point-by-position,
+line-residue-as-digit-or-point, and this one) take Total Price's real
+review burden — flagged cells across ALL 2,304 cells, not just filled
+ones — from 43.9% down to **28.5%**, and flagged-of-filled from 97.2%
+down to **90.0%**. Getting close to something usable. Priority, in
+order:
+
+1. **`possible_merged_digits` (435 fields) is now clearly the largest
+   flag left**, and it wasn't touched by any of today's three fixes.
+   Worth the same treatment: pull real flagged digit crops and check by
+   eye whether they're genuine touching digits or another shape-related
+   artifact `MAX_SINGLE_DIGIT_ASPECT_RATIO` (shared with Qty/Return,
+   tuned only for the latter's narrower cells) doesn't handle well for
+   Total Price's wider ones.
+2. `ambiguous_decimal_point` (212) and the leftover 46
+   `possible_split_digit` cases are both down to a size where they may
+   already be trustworthy signals rather than needing more tuning —
+   worth a quick real-crop spot check before assuming so, same
+   discipline as everything else in this file.
 3. Once Total Price's flag rate is actually informative, the remaining
    build order from before still holds: a quick "send to Odoo" button
    on `review_screen.py`, then the full Odoo module (see "Decisions"
@@ -648,16 +675,21 @@ Windows machine):
 
 **Status as of 2026-09-27:** saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
-(2026-09-26) is built; two real bugs behind its flag rate were found
+(2026-09-26) is built; four real bugs behind its flag rate were found
 and fixed the same session (2026-09-27) — decimal-point detection
-re-tuned to use position instead of size, then a printed-line-residue
-bug (misread as a stray digit, or welded onto a real one) that turned
-out to be the actual dominant cause. Together these cut Total Price's
-real review burden, across every cell not just filled ones, from 43.9%
-to **30.1%** — real, verified progress, though still not yet in
-Qty/Return's ballpark. `possible_split_digit` is the next thing worth a
-look (see "Where a future session should pick this up," above), ahead
-of the desktop "send to Odoo" button and the full Odoo module.
+re-tuned to use position instead of size, a printed-line-residue bug
+(misread as a stray digit, or welded onto a real digit or decimal
+point, fixed in two parts), and a flag (`possible_split_digit`) that
+turned out to be firing on correct reads 86% of the time. Together
+these cut Total Price's real review burden, across every cell not just
+filled ones, from effectively 100% at the start of the session to
+**28.5%** — real, verified progress at every step (each fix checked
+against a full 96-scan before/after run, with zero Qty/Return impact
+throughout), though still not yet in Qty/Return's own ballpark.
+`possible_merged_digits` is now clearly the largest remaining flag and
+the next thing worth a look (see "Where a future session should pick
+this up," above), ahead of the desktop "send to Odoo" button and the
+full Odoo module.
 
 ## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 
