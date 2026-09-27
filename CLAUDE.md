@@ -12,7 +12,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 1157 | 336 | 724 | 97 |
+| `digit_reader.py` | 1174 | 342 | 734 | 98 |
 | `extract_invoice.py` | 642 | 288 | 295 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
@@ -22,7 +22,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5164** | **2096** | **2492** | **576** |
+| **Total** | **5181** | **2102** | **2502** | **577** |
 
 *Last updated: 2026-09-27.*
 
@@ -639,19 +639,53 @@ fields. All 12 remaining cases already carry other flags too
 -- mostly noise read on rows with no real quantity ordered at all --
 so nothing was relying on this flag alone to get caught.
 
-**Where a future session should pick this up (left off 2026-09-27).**
-Four real bugs fixed this session take Total Price's real review
-burden — flagged cells across ALL 2,304 cells, not just filled ones —
-from effectively 100% at the start down to **20.1%**, and
-flagged-of-filled from 97.2% down to **57.5%**. This is now in a
-genuinely usable range, though still short of Qty/Return's own ~39%.
-Priority, in order:
+**Fixed (2026-09-27, same session): most `ambiguous_decimal_point`
+ties didn't actually change the answer, but were flagged anyway.**
+Pulling real flagged cells split into two different pictures: some
+genuinely had two well-separated marks both plausibly the point (real
+ambiguity), but a meaningful share had two candidates sitting in the
+SAME gap between the SAME two digits -- meaning either choice produces
+the identical number, so there was nothing to actually be unsure about.
 
-1. **`ambiguous_decimal_point` (212 fields) is now clearly the largest
-   flag left.** Worth the same treatment as everything else this
-   session: pull real flagged cells and check whether these are genuine
-   ties (two similarly-plausible marks near the digits) or another
-   fixable artifact specific to Total Price's wider cells.
+Measured directly: for every genuinely-tied cell across all 96 scans,
+whether choosing the first vs. second tied candidate changed
+`decimal_before_count` (how many digits land before the point) was
+checked. **37% of ties (78 of 212) made no difference at all** -- both
+candidates placed the point in the same spot. `segment_price_blobs()`
+now only keeps the `ambiguous_decimal_point` flag when the two tied
+candidates would actually split the digits differently; when they
+agree, the shared answer is used with no flag, exactly as if there'd
+been no tie to begin with.
+
+(A related, narrower idea was also checked and mostly ruled out: many
+early examples looked like a single decimal point that fragmented into
+two tiny touching pieces during thresholding. Measured across all
+tied cells, though, only 17% of the pairs were actually that close
+together -- the median tied pair sat 21% of the cell's width apart, too
+far to be one fragmented mark. The tie-doesn't-matter fix above covers
+far more cases than chasing that narrower one would have.)
+
+Verified across all 96 scans: zero Qty/Return impact, zero Total Price
+values changed (by construction -- this only resolves ties where both
+choices already agreed on the value). `ambiguous_decimal_point` drops
+from 212 to **134** fields.
+
+**Where a future session should pick this up (left off 2026-09-27).**
+Five real bugs fixed this session take Total Price's real review
+burden — flagged cells across ALL 2,304 cells, not just filled ones —
+from effectively 100% at the start down to **17.9%**, and
+flagged-of-filled from 97.2% down to **49.2%**. Within reach of
+Qty/Return's own ~39%. Priority, in order:
+
+1. **`ambiguous_decimal_point` (134 fields) is still the largest flag
+   left**, now representing genuine ambiguity (two well-separated
+   candidates that really would give different answers) rather than
+   ties that didn't matter. Worth checking a real sample to see whether
+   these are truly unresolvable from the image alone (in which case the
+   flag is doing its job correctly) or whether another positional signal
+   -- e.g. preferring whichever candidate sits closer to the cell's
+   vertical middle, where a decimal point usually sits relative to a
+   digit's baseline -- could resolve more of them.
 2. The remaining `unreadable_ink` (85), `total_price_without_quantity`
    (77), `low_confidence` (73), `no_decimal_point` (60), and
    `possible_split_digit` (46) are all down to a size where they may
@@ -710,25 +744,26 @@ Windows machine):
 
 **Status as of 2026-09-27:** saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
-(2026-09-26) is built; five real bugs behind its flag rate were found
+(2026-09-26) is built; six real bugs behind its flag rate were found
 and fixed the same session (2026-09-27) — decimal-point detection
 re-tuned to use position instead of size, a printed-line-residue bug
 (misread as a stray digit, or welded onto a real digit or decimal
 point, fixed in two parts), a flag (`possible_split_digit`) firing on
-correct reads 86% of the time, and a second flag
-(`possible_merged_digits`) using a Qty/Return-only threshold that never
-fit Total Price's own wider digit shapes. Together these cut Total
-Price's real review burden, across every cell not just filled ones,
-from effectively 100% at the start of the session to **20.1%**, and
-flagged-of-filled from 97.2% down to **57.5%** — real, verified
-progress at every step (each fix checked against a full 96-scan
-before/after run, with zero Qty/Return impact throughout, and the last
-two fixes changing zero actual Total Price values, only which ones get
-flagged). Genuinely usable now, though still short of Qty/Return's own
-~39%. `ambiguous_decimal_point` is now clearly the largest remaining
-flag and the next thing worth a look (see "Where a future session
-should pick this up," above), ahead of the desktop "send to Odoo"
-button and the full Odoo module.
+correct reads 86% of the time, a second flag (`possible_merged_digits`)
+using a Qty/Return-only threshold that never fit Total Price's own
+wider digit shapes, and a third flag (`ambiguous_decimal_point`) firing
+on ties that didn't actually change the answer 37% of the time. Together
+these cut Total Price's real review burden, across every cell not just
+filled ones, from effectively 100% at the start of the session to
+**17.9%**, and flagged-of-filled from 97.2% down to **49.2%** — real,
+verified progress at every step (each fix checked against a full
+96-scan before/after run, with zero Qty/Return impact throughout, and
+the last three fixes changing zero actual Total Price values, only
+which ones get flagged). Within reach of Qty/Return's own ~39%.
+`ambiguous_decimal_point` (now representing genuine ambiguity rather
+than moot ties) is still the largest remaining flag and the next thing
+worth a look (see "Where a future session should pick this up," above),
+ahead of the desktop "send to Odoo" button and the full Odoo module.
 
 ## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 

@@ -845,11 +845,28 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
              if min_digit_x - span_margin <= (b["x1"] + b["x2"]) / 2 <= max_digit_x + span_margin),
             key=gap_to_digits,
         )
+        def before_count(point_blob):
+            point_x = (point_blob["x1"] + point_blob["x2"]) / 2
+            return sum(1 for d in digit_blobs if (d["x1"] + d["x2"]) / 2 < point_x)
+
         if contenders:
             num_decimal_candidates = 1
             if len(contenders) > 1:
                 gap_difference = gap_to_digits(contenders[1]) - gap_to_digits(contenders[0])
-                if gap_difference / cell_width < CONTENDER_GAP_MARGIN_FRACTION:
+                # A tie is only worth flagging if it actually changes the
+                # answer. Two candidates -- often a real point and a
+                # separate stray mark -- can both sit in the same gap
+                # between the same two digits, placing the point in the
+                # identical spot either way regardless of which one is
+                # "real" (measured: 37% of ties across all 96 scans were
+                # exactly this -- same decimal_before_count from either
+                # candidate). Only treat it as genuinely unresolved when
+                # the two candidates would actually split the digits
+                # differently.
+                if (
+                    gap_difference / cell_width < CONTENDER_GAP_MARGIN_FRACTION
+                    and before_count(contenders[0]) != before_count(contenders[1])
+                ):
                     num_decimal_candidates = 2  # a genuine tie, not a confident pick
             point_x = (contenders[0]["x1"] + contenders[0]["x2"]) / 2
             decimal_before_count = sum(
