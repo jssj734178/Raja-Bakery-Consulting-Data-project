@@ -252,6 +252,13 @@ SPLIT_FRAGMENT_FRACTION = 0.5
 DECIMAL_POINT_MAX_HEIGHT_FRACTION = 0.25
 DECIMAL_POINT_MAX_AREA_FRACTION = 0.005
 
+# How much wider than tall a mark can be and still plausibly be a dot or
+# short dash rather than a sliver of leftover printed-line residue (see
+# is_decimal_point in segment_price_blobs, and LINE_RESIDUE_MAX_ASPECT_RATIO
+# below for the equivalent guard on digits). The widest real decimal
+# point seen so far, a dash rather than a round dot, measured 2.6.
+DECIMAL_POINT_MAX_ASPECT_RATIO = 3
+
 # How far past the outermost digit a candidate can still sit and count
 # as plausibly belonging to that number, as a fraction of the cell's own
 # width -- covers a decimal point written after the last digit with no
@@ -749,9 +756,21 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
         )
 
     def is_decimal_point(blob):
+        height = blob["y2"] - blob["y1"]
+        width = blob["x2"] - blob["x1"]
+        # A real decimal point is compact -- roughly as wide as it is
+        # tall, whether drawn as a dot or a short dash (the widest real
+        # example seen, a dash, measured 2.6x). Without this, the same
+        # line-residue fragment that is_digit() now rejects by shape
+        # (LINE_RESIDUE_MAX_ASPECT_RATIO) could still sneak in here
+        # instead, since a thin sliver is small in both area and height
+        # even while being far too wide to be a dot -- measured across a
+        # 30-page sample, 11% of everything that passed the area/height
+        # check alone was one of these slivers, not a real point.
         return (
             blob["area"] <= DECIMAL_POINT_MAX_AREA_FRACTION * cell_area
-            and (blob["y2"] - blob["y1"]) <= DECIMAL_POINT_MAX_HEIGHT_FRACTION * cell_height
+            and height <= DECIMAL_POINT_MAX_HEIGHT_FRACTION * cell_height
+            and width <= DECIMAL_POINT_MAX_ASPECT_RATIO * height
         )
 
     def is_stroke_sized(blob):

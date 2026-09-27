@@ -12,7 +12,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 1110 | 336 | 679 | 95 |
+| `digit_reader.py` | 1129 | 340 | 693 | 96 |
 | `extract_invoice.py` | 642 | 288 | 295 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
@@ -22,7 +22,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5117** | **2096** | **2447** | **574** |
+| **Total** | **5136** | **2100** | **2461** | **575** |
 
 *Last updated: 2026-09-27.*
 
@@ -561,6 +561,24 @@ before and after still show a number, only one case came out unflagged
 with a different value than before, and it checks out independently:
 `50 units × $2.60/unit = $130.00`, exactly the bulk-discount example
 already documented above under "Checked against 7 real scans."
+
+**Also fixed (2026-09-27, same session): the same shape-blindness bug,
+found again in the decimal-point check.** While investigating
+`possible_split_digit` next (below), the same kind of leftover
+printed-line sliver turned up again -- this time passing
+`is_decimal_point()`'s area-and-height check (small enough in both) with
+no check on its WIDTH, so a 178px-wide, 19px-tall residue fragment could
+still masquerade as a decimal point candidate even after the digit-side
+fix above. Measured across a 30-page sample: 251 of 2,321 decimal
+candidates (11%) were one of these wide slivers, not a real dot or dash.
+`is_decimal_point()` now also requires the mark be reasonably
+compact -- no wider than `DECIMAL_POINT_MAX_ASPECT_RATIO` (3) times its
+own height, comfortably above the widest real dash-shaped point measured
+so far (2.6). Verified across all 96 scans: Qty/Return untouched (0
+differences across 2,304 fields, as always), and `ambiguous_decimal_point`
+drops from 254 to 212 as ties that were never real (one candidate a
+genuine point, the other a residue sliver) resolve cleanly instead of
+being flagged as a tie.
 
 **Where a future session should pick this up (left off 2026-09-27).**
 Total Price's real review burden is now 30.1% of all cells, down from
