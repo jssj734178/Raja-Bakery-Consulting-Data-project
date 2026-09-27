@@ -306,12 +306,31 @@ PRICE_DUST_AREA_FRACTION = 0.0005
 # MAX_EXPECTED_DIGITS allows for a plain quantity field.
 MAX_EXPECTED_PRICE_DIGITS = 6
 
+# The Total Price equivalent of MAX_SINGLE_DIGIT_ASPECT_RATIO (used for
+# the possible_merged_digits flag) -- kept as its own, much higher
+# constant because Qty/Return's value (1.5) turned out not to transfer.
+# This handwriting's cursive ending on a whole-dollar amount (a "00"
+# cents suffix drawn as one connected loop rather than two separate
+# zeros) is naturally much wider than any Qty/Return digit ever is.
+# Measured directly: comparing every possible_merged_digits-flagged
+# field's widest digit against whether that field's unit price matched
+# its own product's usual price elsewhere in the same 96-scan corpus (a
+# proxy for "this read is probably actually correct"), the aspect-ratio
+# distributions of the "probably correct" and "probably not" groups were
+# nearly identical up to about 3, and only started separating past that.
+# At this threshold, exactly 0 of 129 "probably correct" reads still
+# trip the flag, while 97% of the "probably not" group no longer does
+# either -- the ones that still do are the genuinely extreme outliers
+# (up to 11.8), not ordinary correct reads.
+MAX_SINGLE_PRICE_DIGIT_ASPECT_RATIO = 5
+
 # How much wider than tall a blob can be, as a straight ratio, and still
 # plausibly be a single digit -- used only to decide whether something
 # qualifies as a digit AT ALL (see is_digit in segment_price_blobs), not
-# how confident to be about it once it does (that's the separate, much
-# tighter MAX_SINGLE_DIGIT_ASPECT_RATIO used for the possible_merged_digits
-# flag). Set far above what any real digit reaches, on purpose: measured
+# how confident to be about it once it does (that's the separate
+# MAX_SINGLE_PRICE_DIGIT_ASPECT_RATIO just above, used for the
+# possible_merged_digits flag). Set far above what any real digit reaches
+# on purpose: measured
 # across every blob classified as a digit in all 96 real scans, one that
 # only qualifies by area (rather than by being tall enough on its own)
 # has an aspect ratio under 3 in 90% of cases even at its most extreme,
@@ -886,7 +905,7 @@ def classify_price(
     flag_reasons = []
     if len(digit_blobs) > MAX_EXPECTED_PRICE_DIGITS:
         flag_reasons.append("too_many_blobs")
-    if any(blob.shape[1] / blob.shape[0] > MAX_SINGLE_DIGIT_ASPECT_RATIO for blob in digit_blobs):
+    if any(blob.shape[1] / blob.shape[0] > MAX_SINGLE_PRICE_DIGIT_ASPECT_RATIO for blob in digit_blobs):
         flag_reasons.append("possible_merged_digits")
 
     # Unlike classify_blobs() (Qty/Return), this does NOT also flag a
