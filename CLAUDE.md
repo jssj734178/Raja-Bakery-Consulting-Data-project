@@ -12,7 +12,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 1053 | 329 | 631 | 93 |
+| `digit_reader.py` | 1110 | 336 | 679 | 95 |
 | `extract_invoice.py` | 642 | 288 | 295 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
@@ -22,7 +22,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5060** | **2089** | **2399** | **572** |
+| **Total** | **5117** | **2096** | **2447** | **574** |
 
 *Last updated: 2026-09-27.*
 
@@ -481,52 +481,108 @@ actually qualifies.
 
 **But the overall flag rate barely moved (98.0% → 97.2%), because a
 separate, much bigger problem was hiding underneath it the whole
-time.** `possible_merged_digits` fires on **726 of 903 filled
-fields — 80%** — completely unchanged by this fix (confirmed: identical
-count before and after, since nothing above touches digit
-classification itself). Checked by eye against the saved digit-crop
-pictures: most of these are not actually two touching digits. They're
-the SAME printed-line-residue problem as the decimal-point swallow bug
-above, just landing on a real digit instead of a decimal point — a
-sliver of the table's own outer printed border survives cleanup and
-welds onto whichever digit sits closest to it (the same stroke-repair
-step that fixes a digit legitimately split by an erased line), which
-stretches that digit's measured width until it trips the
-"wider-than-a-real-digit" check. This is suspected to hit Total Price
-specifically because it is the one column whose right edge sits
-directly on the table's own outer border rather than a lighter
-internal divider (Qty/Return's boxes both snap onto internal dividers
-instead — see "It nudges each box's edges inwards" earlier in this
-file).
+time.** `possible_merged_digits` fired on **726 of 903 filled
+fields — 80%** — completely unchanged by the decimal-point fix above
+(confirmed: identical count before and after, since none of that logic
+touches digit classification). Checked by eye against the saved
+digit-crop pictures: most of these were not actually two touching
+digits.
+
+**Fixed (2026-09-27, same session): the real cause of
+`possible_merged_digits` — a leftover fragment of a row's own printed
+line, not touching handwriting at all.** Tracing an actual flagged
+field's digit crop back through every stage of cleanup (a purpose-built
+debug script that dumps the thresholded, line-isolated, subtracted, and
+reconnected picture side by side) showed the true cause: a row's own
+top or bottom printed ruled line does NOT always get fully erased by
+`_remove_printed_lines` — a fragment of it, still visibly a long, thin
+line shape (one confirmed example measured 541px wide but only 31px
+tall), survives as leftover "ink." That fragment then does one of two
+things, both traced to real examples:
+
+- **It gets misread as a digit all on its own.** `is_digit()` accepts
+  a blob by AREA alone with no check on its shape, and a long thin line
+  has enough raw pixel area (541 × 31px) to clear that floor even
+  though it looks nothing like a numeral — this is what
+  `possible_merged_digits` was actually catching most of the time.
+- **It gets welded onto a real decimal point candidate.** The same
+  stroke-repair step that reconnects a digit legitimately split by an
+  erased line doesn't check how far apart two pieces are vertically,
+  only whether they overlap sideways — so a decimal point sitting well
+  above a stray line fragment near the bottom of the same wide cell
+  (over 100px apart vertically, confirmed on a real "130.0" that read
+  as "1300"/`no_decimal_point`) gets welded into one blob tall and wide
+  enough to look like a garbled digit, swallowing the real point in the
+  process.
+
+This turned out to be why the bug is so much worse for Total Price than
+for Qty/Return: it's not about being next to the outer border as first
+suspected — it's simply that Total Price's cells are much WIDER (dollar
+amounts need more horizontal room), so an incompletely-erased line
+fragment has more room to accumulate real ink area, and a decimal point
+elsewhere in that same wide cell has more room to coincidentally line
+up sideways with it.
+
+**The fix, in `segment_price_blobs()` only** (Qty/Return's
+`segment_digit_blobs()` is untouched and was verified byte-for-byte
+identical across all 2,304 Qty/Return fields before and after):
+
+- `is_digit()` now also rejects anything whose width is more than
+  `LINE_RESIDUE_MAX_ASPECT_RATIO` (5) times its height, regardless of
+  area — measured across all 96 scans, a blob that only qualifies by
+  area (not by being tall enough on its own) has an aspect ratio under
+  3 in 90% of real cases, while a line-residue fragment routinely
+  measures 8 to 70+.
+- `_merge_stroke_fragments()` gained an optional vertical-distance cap
+  (`max_vertical_gap`, unbounded by default so Qty/Return's own call
+  site is completely unaffected). `segment_price_blobs()` passes
+  `STROKE_MAX_VERTICAL_GAP_FRACTION` (0.25 of the cell's height) — well
+  above a genuine split-digit repair's own gap, well below the 0.44
+  measured on the real bad merge above.
+
+**Measured effect, before/after, same 96 scans, same code path:**
+
+| | Decimal-position fix only | + this fix |
+|---|---|---|
+| All 2,304 Total Price cells flagged, any reason | 1,012 (43.9%) | **694 (30.1%)** |
+| Of filled-in cells, `possible_merged_digits` | 726 | **435** |
+| Of filled-in cells, flagged for any reason | 878/903 (97.2%) | 577/600 (96.2%) |
+| Filled-in cells (has_digit ink at all) | 903 | 600 |
+
+The drop from 903 to 600 "filled" cells is itself part of the fix, not
+a new problem: 303 cells that used to show a bogus number (a stray line
+fragment or noise speck misread as a lone digit) now correctly show
+blank, because there was no real digit ink there at all. Checked
+directly: 192 of those 303 former values were under $1.00 — not a
+realistic total for any product on this form — and zero cells went the
+other way (a cell that was genuinely blank before never gained a fake
+value from this fix). Across every cell where a value changed but both
+before and after still show a number, only one case came out unflagged
+with a different value than before, and it checks out independently:
+`50 units × $2.60/unit = $130.00`, exactly the bulk-discount example
+already documented above under "Checked against 7 real scans."
 
 **Where a future session should pick this up (left off 2026-09-27).**
-Priority, in order:
+Total Price's real review burden is now 30.1% of all cells, down from
+43.9% this session and effectively 100% before this session started —
+real progress, but still well above Qty/Return's ~39% OF FILLED
+fields (a much smaller base, since Qty/Return doesn't count blanks
+the same way `total_price` does here). Priority, in order:
 
-1. **Investigate and fix the border-residue-merging-into-a-digit bug
-   before anything else** — it is now clearly the dominant cause of
-   Total Price's flag rate (726/903 fields, vs. 436/903 for decimal
-   issues), and it likely also recovers some of the decimal-point
-   swallow cases left unfixed above, since it's the same underlying
-   mechanism. Concretely: look at why `_remove_printed_lines`'s
-   isolation of the table's OUTER border specifically (as opposed to
-   an internal divider) is leaving enough residue behind for the
-   stroke-reconnect step to weld it onto a real digit — start from the
-   saved digit crops in a `possible_merged_digits`-flagged field's
-   `digit_crops/` folder (visibly shows a digit with a horizontal
-   sliver attached) and work backwards to why that sliver survived.
-   Whatever the fix, verify it the same way every fix in this file has
-   been verified: a full 96-page before/after run, not a spot check.
-2. Once that's addressed, re-measure the Total Price flag rate from
-   scratch — it may already be in a usable range, or may need a
-   further pass on `MAX_SINGLE_DIGIT_ASPECT_RATIO` specifically for
-   Total Price (currently shared with Qty/Return, tuned only for the
-   latter's narrower digits).
-3. Once Total Price reads cleanly enough that its flag rate is
-   actually informative (in the same ballpark as Qty/Return's ~39%,
-   not necessarily identical), the remaining build order from before
-   still holds: a quick "send to Odoo" button on `review_screen.py`,
-   then the full Odoo module (see "Decisions" above for why that
-   order).
+1. **Look at what's left.** `possible_split_digit` didn't drop with
+   this fix (297 → 320, even ticked up slightly) and is now the
+   second-largest flag. Worth the same treatment as the two bugs found
+   this session: pull a handful of real `possible_split_digit`-flagged
+   digit crops and check by eye whether they're genuine broken strokes
+   or another artifact of Total Price's wider cells that Qty/Return
+   doesn't share.
+2. `low_confidence` and `total_price_without_quantity` both fell
+   sharply as a side effect of this session's fixes (387→73, 374→77) —
+   worth confirming that drop holds up rather than assuming it will.
+3. Once Total Price's flag rate is actually informative, the remaining
+   build order from before still holds: a quick "send to Odoo" button
+   on `review_screen.py`, then the full Odoo module (see "Decisions"
+   above for why that order).
 4. The catalog-price sanity flag noted earlier is worth adding
    alongside step 1, if/when Jagbir provides catalog prices per
    product — it would independently help spot a bad Total Price read
@@ -574,16 +630,16 @@ Windows machine):
 
 **Status as of 2026-09-27:** saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
-(2026-09-26) is built; its decimal-point detection was re-tuned
-(2026-09-27) from real measurements across all 96 scans, genuinely
-cutting decimal-related flags by 24% (575 → 436 fields) — but the
-overall flag rate barely moved (98.0% → 97.2%) because a separate,
-larger bug dominates: printed-line residue merging into a real digit
-and inflating its measured width, flagging it as `possible_merged_digits`
-on 80% of filled fields. That bug, not further decimal-point tuning, is
-now the next priority, ahead of the desktop "send to Odoo" button and
-the full Odoo module (see "Where a future session should pick this up,"
-above).
+(2026-09-26) is built; two real bugs behind its flag rate were found
+and fixed the same session (2026-09-27) — decimal-point detection
+re-tuned to use position instead of size, then a printed-line-residue
+bug (misread as a stray digit, or welded onto a real one) that turned
+out to be the actual dominant cause. Together these cut Total Price's
+real review burden, across every cell not just filled ones, from 43.9%
+to **30.1%** — real, verified progress, though still not yet in
+Qty/Return's ballpark. `possible_split_digit` is the next thing worth a
+look (see "Where a future session should pick this up," above), ahead
+of the desktop "send to Odoo" button and the full Odoo module.
 
 ## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 

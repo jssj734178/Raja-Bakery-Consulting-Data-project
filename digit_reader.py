@@ -299,6 +299,35 @@ PRICE_DUST_AREA_FRACTION = 0.0005
 # MAX_EXPECTED_DIGITS allows for a plain quantity field.
 MAX_EXPECTED_PRICE_DIGITS = 6
 
+# How much wider than tall a blob can be, as a straight ratio, and still
+# plausibly be a single digit -- used only to decide whether something
+# qualifies as a digit AT ALL (see is_digit in segment_price_blobs), not
+# how confident to be about it once it does (that's the separate, much
+# tighter MAX_SINGLE_DIGIT_ASPECT_RATIO used for the possible_merged_digits
+# flag). Set far above what any real digit reaches, on purpose: measured
+# across every blob classified as a digit in all 96 real scans, one that
+# only qualifies by area (rather than by being tall enough on its own)
+# has an aspect ratio under 3 in 90% of cases even at its most extreme,
+# while a leftover fragment of the row's own printed line -- long and
+# thin, the actual reason this constant exists -- routinely measures
+# 8 to 70+. Anything past this is treated as line residue, not a digit,
+# regardless of how much raw ink area it has.
+LINE_RESIDUE_MAX_ASPECT_RATIO = 5
+
+# The two pieces of a digit genuinely split by an erased printed line
+# sit close together vertically -- a small multiple of that line's own
+# removed thickness (see _severed_gap, ~0.11 of the cell's height).
+# This caps how far apart, vertically, two blobs can be and still be
+# merged as if they were split pieces of the same mark -- set with
+# comfortable headroom above a genuine repair's own gap, while staying
+# well under the one confirmed bad merge that motivated this: a decimal
+# point and an unrelated leftover fragment of the row's own printed
+# line, sitting over 100px apart vertically in a ~240px-tall cell
+# (0.44 of the cell's height) purely because they happened to overlap
+# sideways. Total Price's much wider cells give that kind of coincidence
+# more room to happen than Qty/Return's narrower ones do.
+STROKE_MAX_VERTICAL_GAP_FRACTION = 0.25
+
 # A blob is claimed by this cell only if at least this fraction of
 # its ink lies inside the cell's own box. The crop is deliberately
 # taken with a generous margin, so ink from the row above or below
@@ -504,7 +533,7 @@ def _owned_ink(ink: np.ndarray, cell_box: tuple) -> np.ndarray:
     return np.where(owned, ink, 0).astype(np.uint8)
 
 
-def _merge_stroke_fragments(blobs: list[dict]) -> list[dict]:
+def _merge_stroke_fragments(blobs: list[dict], max_vertical_gap: float = float("inf")) -> list[dict]:
     """
     Merge blobs that are really separate strokes of one digit.
 
@@ -518,11 +547,18 @@ def _merge_stroke_fragments(blobs: list[dict]) -> list[dict]:
     Args:
         blobs: dicts with "x1"/"y1"/"x2"/"y2" bounds and a boolean
             "mask" over the full crop.
-
-    Returns:
-        The same list with overlapping entries combined. Runs to a
-        fixed point, so a digit broken into three or more pieces
-        merges in successive passes rather than only pairwise.
+        max_vertical_gap: the two pieces of a digit genuinely split by
+            an erased line sit close together vertically -- about as
+            far apart as that line's own removed thickness (see
+            _severed_gap). Two blobs further apart than this, even if
+            they happen to overlap in x, are not a split digit; they're
+            unrelated marks that coincidentally line up sideways (found
+            on a real Total Price cell: a decimal point and a leftover
+            fragment of the row's own printed bottom line, over 100px
+            apart vertically in a ~240px cell, merging into one blob
+            that read as neither). Left unbounded by default so
+            segment_digit_blobs's existing, already-verified behaviour
+            for Qty/Return is untouched unless a caller opts in.
     """
     blobs = list(blobs)
     merged_any = True
@@ -533,7 +569,8 @@ def _merge_stroke_fragments(blobs: list[dict]) -> list[dict]:
                 first, second = blobs[i], blobs[j]
                 overlap = min(first["x2"], second["x2"]) - max(first["x1"], second["x1"])
                 narrower = min(first["x2"] - first["x1"], second["x2"] - second["x1"])
-                if overlap > STROKE_X_OVERLAP_FRACTION * narrower:
+                vertical_gap = max(0, max(first["y1"], second["y1"]) - min(first["y2"], second["y2"]))
+                if overlap > STROKE_X_OVERLAP_FRACTION * narrower and vertical_gap <= max_vertical_gap:
                     blobs[i] = {
                         "x1": min(first["x1"], second["x1"]),
                         "y1": min(first["y1"], second["y1"]),
@@ -683,12 +720,32 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
              "area": area, "mask": labels == label}
         )
 
-    blobs = _merge_stroke_fragments(blobs)
+    # Only merge pieces that are also close together vertically -- see
+    # _merge_stroke_fragments's max_vertical_gap for why this matters
+    # more here than for Qty/Return: Total Price's much wider cells give
+    # a leftover fragment of the row's own printed line more room to
+    # coincidentally overlap, in x, with a small mark (like a decimal
+    # point) that's actually nowhere near it vertically.
+    blobs = _merge_stroke_fragments(blobs, max_vertical_gap=STROKE_MAX_VERTICAL_GAP_FRACTION * cell_height)
 
     def is_digit(blob):
+        height = blob["y2"] - blob["y1"]
+        if height >= MIN_BLOB_HEIGHT_FRACTION * cell_height:
+            return True
+        # Qualifying by area alone still requires a shape a digit could
+        # plausibly have. Real digits and the merges the fixes above still
+        # miss occasionally never come close to LINE_RESIDUE_MAX_ASPECT_RATIO
+        # wide-to-tall -- measured across 903 real Total Price cells, a
+        # genuine short digit's own aspect ratio maxes out well under it,
+        # while a leftover fragment of the row's own printed line (long
+        # and thin) routinely measures 8-70+. Without this, that fragment
+        # alone -- no merge needed -- has enough raw ink area to pass as a
+        # "digit" purely because it's long, triggering possible_merged_digits
+        # on a cell that has no touching digits in it at all.
+        width = blob["x2"] - blob["x1"]
         return (
             blob["area"] >= MIN_BLOB_AREA_FRACTION * cell_area
-            or (blob["y2"] - blob["y1"]) >= MIN_BLOB_HEIGHT_FRACTION * cell_height
+            and width <= LINE_RESIDUE_MAX_ASPECT_RATIO * height
         )
 
     def is_decimal_point(blob):
