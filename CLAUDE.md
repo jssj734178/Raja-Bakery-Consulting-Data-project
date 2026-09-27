@@ -12,8 +12,8 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 954 | 303 | 562 | 89 |
-| `extract_invoice.py` | 641 | 288 | 294 | 59 |
+| `digit_reader.py` | 1053 | 329 | 631 | 93 |
+| `extract_invoice.py` | 642 | 288 | 295 | 59 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -22,9 +22,9 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **4960** | **2063** | **2329** | **568** |
+| **Total** | **5060** | **2089** | **2399** | **572** |
 
-*Last updated: 2026-09-26.*
+*Last updated: 2026-09-27.*
 
 ## What this is
 
@@ -415,37 +415,119 @@ solid and what isn't.
   prices themselves recorded somewhere (`product_rows.json` only has
   product names today), which hasn't been gathered from Jagbir yet.
 
-**Where a future session should pick this up (left off 2026-09-26).**
+**Fixed (2026-09-27): the decimal-point detection was re-tuned against
+real measurements, exactly as planned above — but the real finding was
+that "tune the thresholds" was the wrong framing entirely.**
+
+The plan above assumed a real decimal point and an ordinary stray mark
+would separate cleanly if the area/height cutoffs were measured
+properly instead of guessed. They don't. Measured directly across all
+96 real scans: 1,214 Total Price cells with no handwriting in them at
+all still produce small surviving specks of paper grain in 95% of
+them, and those specks measure **the same size** as the one real
+decimal point originally used to set the thresholds — same area, same
+height, same how-solid-the-mark-is. A handwritten pencil dot and a
+fleck of paper texture are simply the same physical size on this form.
+No area or height cutoff, however carefully measured, was ever going
+to tell them apart, which is why 2026-09-26's session found the
+90%+ flag rate no matter how the two constants were nudged.
+
+**What actually separates them is position, not size.** A real decimal
+point has to sit somewhere close to the number it belongs to — between
+two of its digits (`"27.00"`), or just past the last digit when no
+cents were written at all (`"130."`, confirmed on a real scan: the dot
+sat 15% of the cell's own width past the last digit). A fleck of paper
+grain has no such preference and lands anywhere in the cell, digits or
+not. `segment_price_blobs()` now scores every small-mark candidate by
+how close it sits to the nearest digit and whether that position is
+plausibly part of the number (`DECIMAL_POINT_SPAN_MARGIN_FRACTION`),
+and picks the closest one with confidence unless a runner-up is nearly
+as close (`CONTENDER_GAP_MARGIN_FRACTION`), in which case it's a
+genuine tie and stays flagged — but even then, best-effort now uses
+that closest guess instead of dropping the decimal point altogether
+(previously, an ambiguous field read as a whole integer with no point
+at all, e.g. `1300` instead of `130.0`).
+
+One related bug was found and deliberately left unfixed: the same
+step that reconnects a digit's strokes after a printed line is erased
+through it can also weld a genuine decimal point onto whichever digit
+sits close beside it (confirmed on a real `"130.0"` that read as
+`1300`/`no_decimal_point` — the point had merged into the final `0`).
+Excluding small, decimal-shaped marks from that reconnect step fixes
+this specific case, but broke a DIFFERENT, already-correctly-reading
+cell in testing (paper-grain specks that used to get silently absorbed
+into a nearby digit — harmless — stayed separate instead and produced
+a false tie). That change was reverted rather than shipped half-safe;
+the swallow bug remains a known, real, but smaller residual case.
+
+**Measured effect, before/after, same 96 scans, same code path (not
+just a spot check):**
+
+| | Before | After |
+|---|---|---|
+| `ambiguous_decimal_point` | 466 | **256** |
+| `no_decimal_point` | 109 | 180 |
+| Either decimal flag (a field can only get one) | 575 | **436** |
+| **All Total Price fields flagged, any reason** | 885/903 (98.0%) | 878/903 (97.2%) |
+
+The decimal-point-specific problem really is smaller now — 139 fewer
+fields have a decimal-related flag, a genuine 24% cut, and the ones
+still flagged are flagged more honestly (a real tie, not "more than
+one speck of dust exists somewhere in this cell"). The rise in
+`no_decimal_point` is mostly that same honesty: fields that used to
+guess a decimal position from whatever noise happened to be nearby
+now correctly say "no point found" when nothing near the digits
+actually qualifies.
+
+**But the overall flag rate barely moved (98.0% → 97.2%), because a
+separate, much bigger problem was hiding underneath it the whole
+time.** `possible_merged_digits` fires on **726 of 903 filled
+fields — 80%** — completely unchanged by this fix (confirmed: identical
+count before and after, since nothing above touches digit
+classification itself). Checked by eye against the saved digit-crop
+pictures: most of these are not actually two touching digits. They're
+the SAME printed-line-residue problem as the decimal-point swallow bug
+above, just landing on a real digit instead of a decimal point — a
+sliver of the table's own outer printed border survives cleanup and
+welds onto whichever digit sits closest to it (the same stroke-repair
+step that fixes a digit legitimately split by an erased line), which
+stretches that digit's measured width until it trips the
+"wider-than-a-real-digit" check. This is suspected to hit Total Price
+specifically because it is the one column whose right edge sits
+directly on the table's own outer border rather than a lighter
+internal divider (Qty/Return's boxes both snap onto internal dividers
+instead — see "It nudges each box's edges inwards" earlier in this
+file).
+
+**Where a future session should pick this up (left off 2026-09-27).**
 Priority, in order:
 
-1. **Tune the decimal-point detection against real measurements before
-   touching anything else in the Odoo build.** A 99% flag rate means
-   Total Price isn't usably automated yet, and shipping the Odoo push
-   on top of it would mean every single line's price needs a human
-   look anyway — not the point of automating this. The next step
-   (already scoped, not yet run to completion) is to gather actual
-   area/height measurements of every non-digit-sized blob inside real,
-   filled-in Total Price cells across a broad sample of the 96 real
-   scans, the same way `FRAGMENT_AREA_FRACTION` and the other
-   `digit_reader.py` constants were originally tuned (see their own
-   comments for that process) — looking for where genuine decimal
-   points and genuine stray marks/paper-grain actually separate in
-   size, rather than guessing a threshold from one or two examples the
-   way the current `DECIMAL_POINT_MAX_AREA_FRACTION`/
-   `DECIMAL_POINT_MAX_HEIGHT_FRACTION` were set. A measurement script
-   for this was half-built this session
-   (`segment_price_blobs`/`classify_price` themselves are done and
-   correct — it's specifically these two thresholds that need
-   real-data tuning) but not run to a conclusion; picking it back up
-   just means gathering that real measurement and re-tuning, not
-   redesigning the mechanism.
-2. Once Total Price reads cleanly enough that its flag rate is
+1. **Investigate and fix the border-residue-merging-into-a-digit bug
+   before anything else** — it is now clearly the dominant cause of
+   Total Price's flag rate (726/903 fields, vs. 436/903 for decimal
+   issues), and it likely also recovers some of the decimal-point
+   swallow cases left unfixed above, since it's the same underlying
+   mechanism. Concretely: look at why `_remove_printed_lines`'s
+   isolation of the table's OUTER border specifically (as opposed to
+   an internal divider) is leaving enough residue behind for the
+   stroke-reconnect step to weld it onto a real digit — start from the
+   saved digit crops in a `possible_merged_digits`-flagged field's
+   `digit_crops/` folder (visibly shows a digit with a horizontal
+   sliver attached) and work backwards to why that sliver survived.
+   Whatever the fix, verify it the same way every fix in this file has
+   been verified: a full 96-page before/after run, not a spot check.
+2. Once that's addressed, re-measure the Total Price flag rate from
+   scratch — it may already be in a usable range, or may need a
+   further pass on `MAX_SINGLE_DIGIT_ASPECT_RATIO` specifically for
+   Total Price (currently shared with Qty/Return, tuned only for the
+   latter's narrower digits).
+3. Once Total Price reads cleanly enough that its flag rate is
    actually informative (in the same ballpark as Qty/Return's ~39%,
    not necessarily identical), the remaining build order from before
    still holds: a quick "send to Odoo" button on `review_screen.py`,
    then the full Odoo module (see "Decisions" above for why that
    order).
-3. The catalog-price sanity flag noted just above is worth adding
+4. The catalog-price sanity flag noted earlier is worth adding
    alongside step 1, if/when Jagbir provides catalog prices per
    product — it would independently help spot a bad Total Price read
    too, not just serve as its own feature.
@@ -490,14 +572,18 @@ Windows machine):
   installable that way, since it's currently loose top-level scripts
   that import each other directly.
 
-**Status as of 2026-09-26:** saving digit pictures for retraining
+**Status as of 2026-09-27:** saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
-(2026-09-26) is built and mostly working, but not yet trustworthy at
-scale — a full 96-page check found 99% of filled-in Total Price fields
-get flagged, so it needs a real-measurement tuning pass before relying
-on it (see "Where a future session should pick this up," above) —
-that's the next priority, ahead of the desktop "send to Odoo" button
-and the full Odoo module.
+(2026-09-26) is built; its decimal-point detection was re-tuned
+(2026-09-27) from real measurements across all 96 scans, genuinely
+cutting decimal-related flags by 24% (575 → 436 fields) — but the
+overall flag rate barely moved (98.0% → 97.2%) because a separate,
+larger bug dominates: printed-line residue merging into a real digit
+and inflating its measured width, flagging it as `possible_merged_digits`
+on 80% of filled fields. That bug, not further decimal-point tuning, is
+now the next priority, ahead of the desktop "send to Odoo" button and
+the full Odoo module (see "Where a future session should pick this up,"
+above).
 
 ## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 

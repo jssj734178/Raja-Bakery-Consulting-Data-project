@@ -226,21 +226,54 @@ SPLIT_FRAGMENT_FRACTION = 0.5
 # MIN_BLOB_AREA_FRACTION/MIN_BLOB_HEIGHT_FRACTION, so a real digit is
 # never mistaken for the point.
 #
-# NOT actually tuned yet, only unblocked: only one real decimal point has
-# been measured this precisely, and a full run across all 96 real scans
-# in invoices/ found 99% of filled-in Total Price fields getting
-# flagged (mostly ambiguous_decimal_point -- more than one small mark in
-# a cell looks like it could be the point at this threshold). That means
-# these two constants are currently wide enough to avoid the "real point
-# discarded as dust" bug they were raised to fix, but not yet narrow
-# enough to actually distinguish a real point from ordinary stray marks
-# -- the real fix is gathering area/height measurements across many real
-# filled-in Total Price cells (the same way FRAGMENT_AREA_FRACTION and
-# MIN_LONE_DIGIT_HEIGHT_FRACTION below were tuned) and re-setting these
-# from that, not guessing again. See CLAUDE.md, "Where a future session
-# should pick this up," for the concrete next step.
+# These two were re-measured (2026-09-27) across every filled-in Total
+# Price cell in all 96 real scans in invoices/, specifically to find out
+# why 99% of them were getting flagged. The answer turned out not to be
+# "these two numbers are wrong": a genuine decimal point and an ordinary
+# fleck of paper grain measure THE SAME on this form -- both are just
+# small, faint marks, and there is no area or height cutoff that tells
+# one from the other. (Measured directly: across 1,214 Total Price cells
+# with no handwriting in them at all, paper grain alone still produces
+# small surviving specks in 95% of them, at almost exactly the same size
+# as the one real decimal point measured here originally.) Narrowing
+# these further would have started discarding real decimal points right
+# alongside the noise, not separating the two.
+#
+# What DOES separate them is not size but WHERE they sit: a real decimal
+# point has to fall somewhere inside the number it belongs to (between
+# its leftmost and rightmost digit), because it's part of the same
+# continuous handwriting, while a fleck of paper grain lands anywhere in
+# the cell with no such preference. That positional test -- not these
+# two constants -- is what actually resolves which candidate is the
+# point; see the "positioned between the digits" logic in
+# segment_price_blobs(). These two constants are kept only as a coarse
+# first filter (too tall or too big to plausibly be a dot at all, e.g. a
+# genuine digit fragment), not as the final decision.
 DECIMAL_POINT_MAX_HEIGHT_FRACTION = 0.25
 DECIMAL_POINT_MAX_AREA_FRACTION = 0.005
+
+# How far past the outermost digit a candidate can still sit and count
+# as plausibly belonging to that number, as a fraction of the cell's own
+# width -- covers a decimal point written after the last digit with no
+# cents digits following it at all (a plain "$130 even", written as
+# "130." with nothing after the dot). Measured on a real such example:
+# the point sat 0.153 of the cell's width past its last digit. Set well
+# above that (with room to spare) rather than exactly at it, since
+# UNDER-shooting this turns a real trailing point into a no_decimal_point
+# flag, which is a smaller loss than the alternative of setting it so
+# wide that unrelated noise elsewhere in the cell starts qualifying.
+DECIMAL_POINT_SPAN_MARGIN_FRACTION = 0.25
+
+# When more than one small mark sits between the number's own digits --
+# a real decimal point plus a stray fleck that also happens to land in
+# that span -- the one actually closest to a digit is almost always the
+# real point (measured: a real point sits a median 0.054 of the cell's
+# width from its nearest digit, versus 0.114 when a noise speck is mixed
+# in with it). This is only treated as a confident pick when the next-
+# closest contender is at least this much farther away; when two
+# candidates are nearly equally close, that's a genuine tie -- flagged
+# as ambiguous_decimal_point rather than guessed.
+CONTENDER_GAP_MARGIN_FRACTION = 0.05
 
 # The dust-vs-ink floor segment_digit_blobs() uses (FRAGMENT_AREA_FRACTION)
 # was tuned for Qty/Return cells, where the smallest thing worth keeping
@@ -248,9 +281,15 @@ DECIMAL_POINT_MAX_AREA_FRACTION = 0.005
 # that -- the same real "29.20" example measured above (0.0025 of the
 # cell) would be discarded as dust by FRAGMENT_AREA_FRACTION (0.003) and
 # never even reach decimal-point classification. segment_price_blobs()
-# uses this lower floor instead, so a genuine decimal point survives
-# while single-pixel paper grain (measured well under 0.0001 of the
-# cell in the same real cells) still doesn't.
+# uses this lower floor instead, so a genuine decimal point survives.
+#
+# This floor does still let a fair amount of plain paper grain through
+# too (measured: cells with no handwriting in them at all still produce
+# small surviving specks most of the time) -- raising it further doesn't
+# fix that, because real decimal points measure the same size as that
+# grain (see DECIMAL_POINT_MAX_HEIGHT_FRACTION above). Telling a real
+# point apart from grain that made it past this floor is handled instead
+# by where it sits relative to the digits, not by raising this number.
 PRICE_DUST_AREA_FRACTION = 0.0005
 
 # Total Price runs higher than a plain Qty/Return quantity ever does (a
@@ -610,11 +649,15 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
         (digit_images, decimal_before_count, num_decimal_candidates,
         fragment_count) -- digit_images is the same as
         segment_digit_blobs's return (the decimal point itself is never
-        included in it, since it isn't a digit); decimal_before_count
-        is how many of those digit images sit to the left of the
-        decimal point, meaningful only when num_decimal_candidates == 1
-        (classify_price treats 0 or >1 as a review flag rather than
-        guessing); fragment_count is as in segment_digit_blobs.
+        included in it, since it isn't a digit); decimal_before_count is
+        how many of those digit images sit to the left of the resolved
+        decimal point, set whenever a decimal point was found at all
+        (including an ambiguous one -- see below); num_decimal_candidates
+        is 0 (no point found), 1 (one clear point, not flagged), or 2
+        (more than one similarly-plausible point -- classify_price flags
+        this as ambiguous_decimal_point, but decimal_before_count still
+        holds its best guess rather than being left unused); fragment_count
+        is as in segment_digit_blobs.
     """
     cell_width = cell_box[2] - cell_box[0]
     cell_height = cell_box[3] - cell_box[1]
@@ -672,16 +715,56 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
     digit_blobs.sort(key=lambda b: (b["x1"] + b["x2"]) / 2)
 
     decimal_before_count = None
-    if len(decimal_candidates) == 1:
-        point_x = (decimal_candidates[0]["x1"] + decimal_candidates[0]["x2"]) / 2
-        decimal_before_count = sum(
-            1 for b in digit_blobs if (b["x1"] + b["x2"]) / 2 < point_x
+    num_decimal_candidates = 0
+    if decimal_candidates and digit_blobs:
+        min_digit_x = min(b["x1"] for b in digit_blobs)
+        max_digit_x = max(b["x2"] for b in digit_blobs)
+
+        def gap_to_digits(blob):
+            """Horizontal distance from blob to the nearest digit, 0 if it overlaps one in x."""
+            gaps = []
+            for d in digit_blobs:
+                if blob["x2"] < d["x1"]:
+                    gaps.append(d["x1"] - blob["x2"])
+                elif blob["x1"] > d["x2"]:
+                    gaps.append(blob["x1"] - d["x2"])
+                else:
+                    gaps.append(0)
+            return min(gaps)
+
+        # A real decimal point has to fall somewhere close to the number
+        # it belongs to -- between two of its digits (e.g. "27.00"), or
+        # just past the last one when no cents digits were written at
+        # all (e.g. "130." as a plain "$130 even" -- confirmed on a real
+        # scan, gap 0.153 of the cell's width past the last digit). A
+        # fleck of paper grain has no such preference and lands anywhere
+        # in the (often wide) cell. A margin past each end of the digits
+        # -- generous enough to cover a genuine trailing point with room
+        # to spare, per that measurement -- keeps the second case while
+        # still ruling out most of the scattered noise; see
+        # CONTENDER_GAP_MARGIN_FRACTION for how a genuine tie between
+        # what's left is still told apart from a single confident answer.
+        span_margin = DECIMAL_POINT_SPAN_MARGIN_FRACTION * cell_width
+        contenders = sorted(
+            (b for b in decimal_candidates
+             if min_digit_x - span_margin <= (b["x1"] + b["x2"]) / 2 <= max_digit_x + span_margin),
+            key=gap_to_digits,
         )
+        if contenders:
+            num_decimal_candidates = 1
+            if len(contenders) > 1:
+                gap_difference = gap_to_digits(contenders[1]) - gap_to_digits(contenders[0])
+                if gap_difference / cell_width < CONTENDER_GAP_MARGIN_FRACTION:
+                    num_decimal_candidates = 2  # a genuine tie, not a confident pick
+            point_x = (contenders[0]["x1"] + contenders[0]["x2"]) / 2
+            decimal_before_count = sum(
+                1 for b in digit_blobs if (b["x1"] + b["x2"]) / 2 < point_x
+            )
 
     digit_images = [
         (b["mask"][b["y1"]:b["y2"], b["x1"]:b["x2"]]).astype(np.uint8) * 255 for b in digit_blobs
     ]
-    return digit_images, decimal_before_count, len(decimal_candidates), fragment_count
+    return digit_images, decimal_before_count, num_decimal_candidates, fragment_count
 
 
 def classify_price(
@@ -755,10 +838,16 @@ def classify_price(
     if num_decimal_candidates == 0:
         flag_reasons.append("no_decimal_point")
         value = float("".join(digits))
-    elif num_decimal_candidates > 1:
-        flag_reasons.append("ambiguous_decimal_point")
-        value = float("".join(digits))
     else:
+        # Even when the point's exact position is a genuine tie between
+        # two similarly-plausible marks (num_decimal_candidates == 2),
+        # decimal_before_count still holds the closer-to-a-digit guess
+        # rather than being thrown away -- a flagged field still gets
+        # the best answer the software could manage (see module
+        # docstring), so this reads as e.g. "130.0" for a reviewer to
+        # confirm or correct, not the much less useful "1300".
+        if num_decimal_candidates > 1:
+            flag_reasons.append("ambiguous_decimal_point")
         whole = "".join(digits[:decimal_before_count]) or "0"
         frac = "".join(digits[decimal_before_count:]) or "0"
         value = float(f"{whole}.{frac}")
