@@ -20,11 +20,12 @@ Price (Total Price divided by line quantity) is shown alongside it,
 recalculating as either is edited -- see CLAUDE.md, "Pricing decision
 reversed" for why the price that ends up on the Odoo invoice line comes
 from the invoice's own handwriting rather than a price list. Reading
-Total Price is newer and less proven than Qty/Return, and its decimal
-point in particular is genuinely hard to find automatically (the mark
-itself is often just 1-2 pixels), so it flags far more often than
-Qty/Return does right now -- expect to check most filled-in Total Price
-fields for a while, not just the flagged ones.
+Total Price is newer than Qty/Return and its decimal point in particular
+is genuinely harder to find automatically, so it still flags somewhat
+more often -- but a round of real fixes (2026-09-27) brought its real
+review burden down to roughly the same ballpark as Qty/Return's, not
+the "expect to check nearly every filled-in field" state it started in
+(see CLAUDE.md for the full history of what was found and fixed).
 
 The customer field is one editable dropdown covering both required ways
 of setting it: pick from customers.json's regular list, or type a name
@@ -34,15 +35,36 @@ folded onto that customer's exact listed spelling rather than kept as
 separately-typed text, so a small typing difference can't quietly create
 what looks like a second, different customer.
 
-Deliberately does NOT import digit_reader, alignment, or torch: this
-screen only displays numbers and images extract_invoice.py already
+Deliberately does NOT import digit_reader, alignment, or torch directly:
+this screen only displays numbers and images extract_invoice.py already
 computed and saved to disk, so it opens instantly with no model/GPU
-dependency of its own.
+dependency of its own. The "Upload PDF..." button (top bar) is the one
+exception that touches that pipeline at all -- it runs pdf_to_images.py
+and extract_invoice.py as SEPARATE SUBPROCESSES in a background thread,
+not as direct imports, specifically so this screen's own fast startup
+is never affected by them; only clicking that button pays their ~20+
+second model-loading cost, and the window stays responsive while it
+runs. This is the quick, desktop-only way to feed a new scan through the
+pipeline described in CLAUDE.md's "Also planned, not yet started" --
+useful now, while the real long-term intake path (an Odoo module) is
+still being built.
+
+The invoice's own handwritten date and its printed invoice number
+(top bar, next to Customer) are both typed in by hand for now rather
+than read automatically -- there's no calibrated box yet for either
+one, and reading the invoice number specifically means reading PRINTED
+(not handwritten) digits, which the model has never been tested on. See
+CLAUDE.md, "the paper invoice number becomes a label" for why both are
+needed on the eventual Odoo invoice regardless. The date is required
+before approving; the invoice number is allowed to stay blank, since
+CLAUDE.md notes it may sometimes be cut off, obscured, or missing on a
+given scan.
 
 Deliberately does NOT talk to Odoo. Approving an invoice here writes a
-review.json (customer, corrected values, which fields were originally
-flagged) next to that invoice's results.json -- reading that file and
-pushing it into Odoo is a separate piece, built separately.
+review.json (customer, invoice date, invoice number, corrected values,
+which fields were originally flagged) next to that invoice's
+results.json -- reading that file and pushing it into Odoo is a
+separate piece, built separately.
 
 Approving also banks digit pictures for future retraining: for every
 Qty/Return/Total Price field the reviewer leaves BOTH unflagged and
@@ -69,17 +91,22 @@ Run with:  python review_screen.py
 """
 
 import argparse
+import glob
 import json
 import os
 import shutil
+import subprocess
+import sys
+import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
 EXTRACTIONS_DIR = "extractions"
 CUSTOMERS_PATH = "customers.json"
+INVOICES_DIR = "invoices"
 
 # Where a field's individual digit crops get copied once a reviewer has
 # left it both unflagged and unchanged -- see module docstring and
@@ -145,15 +172,16 @@ class ReviewScreen:
         self.root.title("Invoice Review")
         self.root.geometry("1150x800")
 
+        # An empty (or missing) extractions/ folder is a normal starting
+        # state now that Upload PDF exists to fill it from inside the
+        # app, not just an error condition to refuse to start over --
+        # see load_invoice() for how the row area handles having
+        # nothing to show yet.
+        os.makedirs(EXTRACTIONS_DIR, exist_ok=True)
         self.invoice_names = sorted(
             name for name in os.listdir(EXTRACTIONS_DIR)
             if os.path.isfile(os.path.join(EXTRACTIONS_DIR, name, "results.json"))
         )
-        if not self.invoice_names:
-            raise FileNotFoundError(
-                f"No extracted invoices found in '{EXTRACTIONS_DIR}/'. "
-                f"Run extract_invoice.py on a scan first."
-            )
 
         with open(CUSTOMERS_PATH) as f:
             self.customers = json.load(f)["customers"]
@@ -192,6 +220,19 @@ class ReviewScreen:
         tk.Button(top, text="< Prev", command=self.prev_invoice).pack(side=tk.LEFT)
         tk.Button(top, text="Next >", command=self.next_invoice).pack(side=tk.LEFT, padx=(4, 12))
 
+        # A quick way to feed a new scan through the pipeline without
+        # typing commands, while the real long-term intake path (the
+        # Odoo module) is being built -- see CLAUDE.md, "Also planned,
+        # not yet started". Runs pdf_to_images.py then extract_invoice.py
+        # as SUBPROCESSES, not direct imports, for the same reason this
+        # whole file avoids importing torch/digit_reader (see module
+        # docstring): those two scripts pull in the model and take
+        # ~20+ seconds just to start, which would slow down every single
+        # launch of this screen if paid up front instead of only when
+        # a PDF is actually uploaded.
+        self.upload_button = tk.Button(top, text="Upload PDF...", command=self._upload_pdf)
+        self.upload_button.pack(side=tk.LEFT)
+
         self.status_label = tk.Label(top, text="", fg="#444444")
         self.status_label.pack(side=tk.LEFT, padx=(12, 0))
 
@@ -214,6 +255,27 @@ class ReviewScreen:
         # not just at save time, so the correction is visible before
         # approving rather than as a surprise afterwards.
         self.customer_picker.bind("<FocusOut>", self._on_customer_focus_out)
+
+        # Both typed by hand for now, not read automatically: the invoice
+        # date has no calibrated box at all yet, and the printed invoice
+        # number's box exists on the form but reading printed (not
+        # handwritten) digits automatically hasn't been built or measured
+        # -- see CLAUDE.md, "the paper invoice number becomes a label".
+        # Kept here rather than skipped entirely because both are needed
+        # on the eventual Odoo invoice (its own date, and a searchable
+        # reference for matching back to the paper copy / catching a
+        # duplicate submission).
+        tk.Label(cust, text="   Date (YYYY-MM-DD):").pack(side=tk.LEFT)
+        self.invoice_date_var = tk.StringVar()
+        tk.Entry(cust, textvariable=self.invoice_date_var, width=12).pack(side=tk.LEFT, padx=4)
+
+        tk.Label(cust, text="Invoice #:").pack(side=tk.LEFT)
+        self.invoice_number_var = tk.StringVar()
+        # No validation on this one -- CLAUDE.md flags that the printed
+        # number may sometimes be cut off, obscured, or missing on a
+        # given scan, so leaving it blank has to be a normal, allowed
+        # state, not an error to fix before approving.
+        tk.Entry(cust, textvariable=self.invoice_number_var, width=12).pack(side=tk.LEFT, padx=4)
 
         tk.Label(
             cust,
@@ -273,6 +335,21 @@ class ReviewScreen:
         review.json, if it's already been approved once before) and
         rebuild the row list from scratch.
         """
+        for child in self.rows_frame.winfo_children():
+            child.destroy()
+        self._crop_images = []
+        self.row_widgets = []
+
+        if not self.invoice_names:
+            tk.Label(
+                self.rows_frame,
+                text="No invoices yet -- click \"Upload PDF...\" above to add one.",
+                fg="#444444", font=("Helvetica", 11),
+            ).pack(anchor="w", pady=30, padx=10)
+            self.approve_button.config(state=tk.DISABLED)
+            self.status_label.config(text="No invoices loaded")
+            return
+
         name = self.invoice_names[self.index]
         self.invoice_var.set(name)
         invoice_dir = os.path.join(EXTRACTIONS_DIR, name)
@@ -290,11 +367,8 @@ class ReviewScreen:
         # reading -- otherwise every re-open would silently discard a
         # previous review's corrections.
         self.customer_var.set(existing_review["customer"] if existing_review else "")
-
-        for child in self.rows_frame.winfo_children():
-            child.destroy()
-        self._crop_images = []
-        self.row_widgets = []
+        self.invoice_date_var.set(existing_review.get("invoice_date", "") if existing_review else "")
+        self.invoice_number_var.set(existing_review.get("paper_invoice_number", "") if existing_review else "")
 
         if self.results.get("invoice_flagged"):
             reason = self.results.get("reason")
@@ -512,6 +586,95 @@ class ReviewScreen:
         self.index = self.invoice_names.index(self.invoice_var.get())
         self.load_invoice()
 
+    def _upload_pdf(self):
+        """
+        Pick a PDF, render it to page images, and run the full
+        extraction pipeline on just those new pages -- run in a
+        background thread so the window stays responsive during the
+        ~20+ second model startup plus a few seconds per page (see
+        CLAUDE.md, "Speed-up"), rather than freezing while it works.
+        """
+        pdf_path = filedialog.askopenfilename(
+            title="Select an invoice PDF", filetypes=[("PDF files", "*.pdf")]
+        )
+        if not pdf_path:
+            return
+
+        self.upload_button.config(state=tk.DISABLED)
+        self.approve_button.config(state=tk.DISABLED)
+        self.status_label.config(text=f"Processing {os.path.basename(pdf_path)}... this can take a minute.")
+
+        thread = threading.Thread(target=self._run_upload_pipeline, args=(pdf_path,), daemon=True)
+        thread.start()
+
+    def _run_upload_pipeline(self, pdf_path: str):
+        """
+        The actual rendering + extraction work, run off the main thread.
+        Both steps are separate SUBPROCESSES (not direct calls) for the
+        same reason this file avoids importing torch/digit_reader at
+        all -- see module docstring and the Upload PDF button's own
+        comment. Schedules _on_upload_finished back onto the main thread
+        with the outcome, since tkinter widgets may only be touched from
+        the thread that created them.
+        """
+        base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+
+        render = subprocess.run(
+            [sys.executable, "pdf_to_images.py", pdf_path],
+            capture_output=True, text=True,
+        )
+        if render.returncode != 0:
+            self.root.after(0, self._on_upload_finished, False, render.stderr or render.stdout, [])
+            return
+
+        new_pages = sorted(glob.glob(os.path.join(INVOICES_DIR, f"{base_name}_page*.png")))
+        if not new_pages:
+            self.root.after(0, self._on_upload_finished, False, "No pages were rendered from that PDF.", [])
+            return
+
+        extract = subprocess.run(
+            [sys.executable, "extract_invoice.py", *new_pages, "--output-dir", EXTRACTIONS_DIR],
+            capture_output=True, text=True,
+        )
+        if extract.returncode != 0:
+            self.root.after(0, self._on_upload_finished, False, extract.stderr or extract.stdout, [])
+            return
+
+        new_invoice_names = [os.path.splitext(os.path.basename(p))[0] for p in new_pages]
+        self.root.after(0, self._on_upload_finished, True, extract.stdout, new_invoice_names)
+
+    def _on_upload_finished(self, success: bool, message: str, new_invoice_names: list):
+        """
+        Back on the main thread: report the outcome, and on success,
+        refresh the invoice list and jump straight to the first
+        newly-added page so the reviewer doesn't have to hunt for it.
+        """
+        self.upload_button.config(state=tk.NORMAL)
+        self.approve_button.config(state=tk.NORMAL)
+
+        if not success:
+            self.status_label.config(text="")
+            messagebox.showerror(
+                "Upload failed",
+                f"Could not process that PDF:\n\n{message[-2000:]}",
+            )
+            return
+
+        self.invoice_names = sorted(
+            name for name in os.listdir(EXTRACTIONS_DIR)
+            if os.path.isfile(os.path.join(EXTRACTIONS_DIR, name, "results.json"))
+        )
+        self.invoice_picker.config(values=self.invoice_names)
+        if new_invoice_names and new_invoice_names[0] in self.invoice_names:
+            self.index = self.invoice_names.index(new_invoice_names[0])
+        self.load_invoice()
+
+        page_word = "page" if len(new_invoice_names) == 1 else "pages"
+        messagebox.showinfo(
+            "Upload complete",
+            f"Processed {len(new_invoice_names)} {page_word}. Showing the first one now.",
+        )
+
     def _resolve_customer_name(self, typed: str) -> str:
         """
         Fold a typed customer name onto the list it if matches one
@@ -569,6 +732,25 @@ class ReviewScreen:
         if not customer:
             messagebox.showerror("Missing customer", "Pick or type a customer before approving.")
             return
+
+        # Required (the eventual Odoo invoice needs its own date -- see
+        # CLAUDE.md, "Use the invoice's own handwritten date"), unlike
+        # the invoice number just below, which is allowed to be blank.
+        invoice_date = self.invoice_date_var.get().strip()
+        try:
+            datetime.strptime(invoice_date, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showerror(
+                "Missing or invalid date",
+                "Enter the invoice's own handwritten date as YYYY-MM-DD before approving.",
+            )
+            return
+
+        # Freely allowed to be blank -- see CLAUDE.md, "the paper invoice
+        # number may not always be visible" -- a missing number just
+        # means the (not yet built) duplicate check can't run for this
+        # invoice, not that approval should be blocked on it.
+        paper_invoice_number = self.invoice_number_var.get().strip()
 
         invoice_name = self.invoice_names[self.index]
         invoice_dir = os.path.join(EXTRACTIONS_DIR, invoice_name)
@@ -644,6 +826,8 @@ class ReviewScreen:
         review = {
             "invoice_name": invoice_name,
             "customer": customer,
+            "invoice_date": invoice_date,
+            "paper_invoice_number": paper_invoice_number,
             "approved": True,
             "reviewed_at": datetime.now().isoformat(timespec="seconds"),
             "rows": rows_out,

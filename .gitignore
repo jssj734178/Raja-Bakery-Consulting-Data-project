@@ -70,3 +70,8 @@ Thumbs.db
 # Claude Code's local, per-machine permission approvals -- not meant
 # to be shared or synced between machines or people.
 .claude/settings.local.json
+
+# Odoo connection details (server URL, database name, login) for the
+# desktop "send to Odoo" push -- credentials, so this must never be
+# committed. See CLAUDE.md's Odoo section for what's expected in it.
+odoo_settings.local.json

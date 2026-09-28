@@ -19,10 +19,10 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `line_counts.py` | 122 | 59 | 47 | 16 |
 | `model.py` | 122 | 22 | 84 | 16 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 713 | 370 | 272 | 71 |
+| `review_screen.py` | 897 | 458 | 350 | 89 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5196** | **2104** | **2514** | **578** |
+| **Total** | **5380** | **2192** | **2592** | **596** |
 
 *Last updated: 2026-09-27.*
 
@@ -214,12 +214,49 @@ copying would work initially, but a fix or model improvement made here
 later would then have to be manually re-applied inside the Odoo module
 too, and the two copies would quietly drift apart over time.
 
-**Also planned, not yet started:**
+**Built (2026-09-27): the desktop "Upload PDF" button on
+`review_screen.py`.** Not the long-term intake path (see above for
+why), but a quick way to feed a new scan through the pipeline locally
+without typing commands, while the Odoo module is still being built.
+Clicking it opens a file picker, then runs `pdf_to_images.py` and
+`extract_invoice.py` as separate SUBPROCESSES (not direct imports) in a
+background thread, so this screen's own fast, model-free startup is
+never affected — only clicking the button pays their ~20+ second
+model-loading cost, and the window stays responsive while it runs. On
+success, the invoice list refreshes and jumps straight to the first
+newly-processed page. An empty (or missing) `extractions/` folder is
+now a normal starting state instead of the app refusing to start,
+specifically so this button has something to fill from a blank slate.
 
-- **A desktop "import PDF" button on `review_screen.py`.** Not the
-  long-term intake path (see above for why), but worth adding anyway as
-  a quick way to feed new scans through the pipeline locally without
-  typing commands, while the Odoo module is being built.
+**Also built (2026-09-27): the invoice's handwritten date and printed
+invoice number, typed by hand for now.** Both are needed on the
+eventual Odoo invoice (see "Use the invoice's own handwritten date" and
+"the paper invoice number becomes a label" above), but neither has a
+calibrated box yet — the date has none at all, and reading the invoice
+number automatically would mean reading PRINTED digits, which the model
+has never been tested on. Rather than block on building that first, two
+plain text fields were added next to Customer on the review screen: a
+required date (`YYYY-MM-DD`, validated before approving) and an
+optional invoice number (left blank is a normal, allowed state — see
+"the number may not always be visible" above). Both are saved into
+`review.json` as `invoice_date` and `paper_invoice_number`, loaded back
+in if the invoice is re-opened after being approved once.
+
+**Found (2026-09-27): the WSL Odoo test server's actual login.** The
+server itself was already found and documented below ("The Odoo server
+this will actually run on"), but not a working login — the `admin_passwd`
+in `odoo.conf` turned out to be the database MASTER password (for
+create/duplicate/drop operations), not a user login, and none of
+Odoo's common defaults (`admin`/`admin`, etc.) worked either. The real
+login (Jagbir's own email plus a PIN-style password) was supplied
+directly and confirmed working over XML-RPC. It's saved in
+`odoo_settings.local.json` at the project root (gitignored — see
+`.gitignore` — since it's a real credential) along with the server's
+current URL and database name (`New_Raja_Bakery`), for whatever
+eventually sends approved invoices to Odoo to read. That URL is WSL's
+own IP, which can change if WSL restarts; re-check with
+`wsl -d Ubuntu -e bash -c "hostname -I"` if the connection ever stops
+working.
 
 **Built (2026-09-25): banking verified-correct crops as future training
 data.** When a reviewer leaves a field unflagged and uncorrected,
