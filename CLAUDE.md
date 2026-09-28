@@ -12,7 +12,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 1174 | 342 | 734 | 98 |
+| `digit_reader.py` | 1219 | 353 | 766 | 100 |
 | `extract_invoice.py` | 657 | 290 | 307 | 60 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
@@ -25,7 +25,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5899** | **2415** | **2837** | **647** |
+| **Total** | **5944** | **2426** | **2869** | **649** |
 
 *Last updated: 2026-09-28.*
 
@@ -336,38 +336,46 @@ afterward, and the one real invoice's test `review.json` (fake
 customer/date, used only to exercise the code) was removed rather than
 left looking like a genuine approval.
 
-**Found while testing (2026-09-28), not yet fixed — the WSL test
-server is unreliable to develop against right now.** The WSL virtual
-machine that runs the Odoo/Postgres containers shuts itself down
-whenever nothing on the Windows side has used it for a short while, and
-restarting it (which happens automatically the moment something tries
-to reach it again) takes several seconds and briefly drops any
-in-progress connection — this showed up as a plain "connection refused"
-error mid-test, twice, with the containers' own logs confirming
-Postgres was mid-shutdown at that exact moment. Not a bug in any of the
-new code, and the eventual Mac deployment won't have this problem at
-all (Docker there won't be sitting inside a virtual machine that
-auto-suspends this way) — but it will keep interrupting work against
-*this* test server specifically until it's addressed, e.g. by turning
-off WSL's idle shutdown or simply keeping a WSL terminal window open
-while working. A short list of small Bash commands worked around it for
-this session's own testing (holding a `wsl -d Ubuntu -e bash -c "sleep
-N"` running in the background), but that's a workaround, not a fix.
+**Found and worked around (2026-09-28) — the WSL test server is
+unreliable to develop against unless something stays connected to it.**
+The Odoo/Postgres containers kept dropping mid-test with a plain
+"connection refused" error, containers' own logs confirming Postgres
+was mid-shutdown at that exact moment. First suspected cause (WSL's
+overall idle-shutdown timer, `vmIdleTimeout` in `.wslconfig`) was tried
+and set to never expire — that did NOT fix it, confirmed by testing:
+the containers still reset within seconds of a gap with nothing
+attached, even with that setting disabled. Testing narrowed it down
+further: the containers stay up fine for as long as SOMETHING stays
+continuously connected to the "Ubuntu" WSL distro (confirmed by holding
+a connection open for 2 and 3 minutes straight with no drop), but the
+moment everything disconnects — even briefly, between two separate
+commands — WSL tears the whole distro down and rebuilds it fresh the
+next time anything touches it. This is a distro-level behavior, not the
+overall-idle-timeout setting. **The confirmed, working fix:** keep one
+WSL session attached the whole time — open a terminal, run `wsl -d
+Ubuntu`, and just leave that window open while using the Odoo test
+server or the "Send to Odoo" button; nothing needs to be typed in it,
+it just needs to stay open. Not a bug in any of this project's own
+code, and the eventual Mac deployment won't have this problem at all
+(Docker there won't be sitting inside a distro that tears itself down
+this way).
 
-**Found while testing (2026-09-28), not yet fixed — one customer's name
-is corrupted in Odoo.** "Zaika's Shawarma" is stored there with its
-apostrophe turned into an unreadable character (`Zaika�s Shawarma`
-— a `�` is what a computer shows when it tried to read text using
-the wrong encoding and hit a byte it couldn't make sense of), almost
-certainly from an encoding mismatch when the customer list was first
-typed into Odoo. Because `send_to_odoo.py` is designed to automatically
-create a brand-new contact for any customer name it can't find an exact
-match for (per the "one-off customer" decision above), sending an
-invoice for this customer right now would create a *second*,
-duplicate "Zaika's Shawarma" contact rather than reuse the real one —
-quietly splitting that customer's invoice history across two records.
-A two-second fix directly in Odoo (retyping the name) resolves this;
-nothing in this project's own code needs to change.
+**Found and fixed (2026-09-28) — one customer's name was corrupted in
+Odoo.** "Zaika's Shawarma" was stored there with its apostrophe turned
+into an unreadable character (`Zaika�s Shawarma` — a `�` is what a
+computer shows when it tried to read text using the wrong encoding and
+hit a byte it couldn't make sense of), almost certainly from an
+encoding mismatch when the customer list was first typed into Odoo.
+Because `send_to_odoo.py` is designed to automatically create a
+brand-new contact for any customer name it can't find an exact match
+for (per the "one-off customer" decision above), sending an invoice for
+this customer would otherwise have created a *second*, duplicate
+"Zaika's Shawarma" contact rather than reusing the real one — quietly
+splitting that customer's invoice history across two records. Fixed
+directly on the Odoo contact record (renamed to match `customers.json`'s
+own spelling exactly) and confirmed the lookup `send_to_odoo.py` uses
+now resolves it correctly; nothing in this project's own code needed to
+change.
 
 **Not yet built:** the fallback when a product genuinely doesn't have
 Odoo match yet (currently blocks the whole send with a list of which
@@ -898,6 +906,71 @@ in order:
    measurement already leaned on a rough version of this idea --
    product-modal pricing across the corpus -- worth formalizing.)
 
+**Fixed (2026-09-28): `ambiguous_decimal_point` cut from 134 to 86 by
+using real 2D distance instead of horizontal-only distance to judge
+which candidate is genuinely close to a digit.** Picking up item 1 from
+the list above. The idea first proposed there -- preferring whichever
+candidate sits closer to the cell's vertical middle -- was tried first
+and measured directly against all 134 real ties: it carried essentially
+no signal at all (the chosen candidate and the discarded one had nearly
+identical vertical positions relative to the digits, 0.518 vs 0.543 of
+the digit span on average, well within noise). That idea was dropped in
+favor of a different one, found while digging into why the first one
+failed.
+
+The real cause: `gap_to_digits` (the function that measures how close a
+candidate mark sits to the nearest digit) only ever measured HORIZONTAL
+distance. A mark sitting directly above or below a digit -- with no real
+relationship to it at all, like a fleck of paper grain, or bleed-through
+from the row above -- registers as "0 gap" purely by sharing that
+digit's left-right position, even though it may be dozens of pixels away
+vertically. That let a genuinely close, genuinely correct decimal point
+get treated as merely "tied" with an unrelated speck that only looked
+close by this flawed, one-dimensional measure.
+
+Measured with a true 2D (both horizontal and vertical) distance instead,
+across all 134 real ties: in 48 of them (36%), the candidate already
+being picked (by the existing horizontal-only logic) turns out to be
+genuinely touching a digit in every direction, while the tied "rival"
+sits nowhere close by any reasonable margin (a median 0.162 of the
+cell's own height away, far outside where a real point could plausibly
+be). Checked by eye on real crops, not just the numbers: a handwritten
+"48.00" whose real decimal point sits flush against the "8", tied
+against a stray fleck of paper grain sitting well below the row
+entirely with nothing to do with the number at all. Those 48 are a
+confident, correct answer, not a genuine tie. Only 13 of 134 had BOTH
+candidates genuinely close to a digit -- those are real ambiguity and
+correctly stay flagged.
+
+The fix, in `segment_price_blobs()` only (new constant
+`DECIMAL_POINT_TOUCH_DISTANCE_FRACTION`): the existing tie check is
+unchanged, but no longer flags a tie when the closer candidate is truly
+(2D) touching a digit and the further one plainly isn't. It never
+changes which candidate is used or what value gets read -- only whether
+it gets flagged -- matching how every other flag-only fix this project
+has made was done. Verified across the full 96-scan corpus, comparing
+every single field before and after: **zero Qty/Return values changed,
+zero Total Price or unit-price values changed, every other flag's count
+identical** (`total_price_without_quantity`, `low_confidence`,
+`no_decimal_point`, `possible_split_digit`, `possible_merged_digits`,
+`quantity_without_total_price`, `unreadable_ink` all unchanged) --
+`ambiguous_decimal_point` alone drops from 134 to **86**, and zero new
+false flags appeared anywhere.
+
+**What's left, updated:** `ambiguous_decimal_point` (86) is still the
+largest single Total Price flag, but the remaining cases are the ones
+already checked and found to be genuine two-candidate ambiguity, not
+solvable by position alone -- a further improvement here would need a
+different kind of signal (ink darkness/solidity, maybe, or accepting
+that some of these are genuinely unresolvable from the image and simply
+need a person to look). Priorities 2-4 from the list above are
+unchanged and still open. Total Price's overall flagged count (all
+2,304 cells) is now **12.6%** (291 cells, down from 14.5%), and
+flagged-of-filled is down to **42.2%** (253 of 600, down from 49.2%) --
+getting closer to Qty/Return's own ~39%, though the remaining flags are
+a harder, more genuinely-ambiguous residue than the ones already
+resolved.
+
 ## The Odoo server this will actually run on (checked 2026-09-23)
 
 Found by checking the machine directly rather than asking Jagbir to
@@ -943,13 +1016,18 @@ above is built and verified end-to-end against the live test server —
 real value can now flow from an approved invoice into an Odoo draft
 invoice, ahead of schedule relative to the plan below (which had it
 waiting on Total Price's flag rate coming down first). Two things found
-while building it are worth a look before relying on it day-to-day: the
-WSL test server's own instability (a development annoyance, not
-expected on the eventual Mac), and one customer's corrupted name in
-Odoo (a two-second manual fix, not a code change) — see the "Found
-while testing" notes just above for both. What follows below is
-slightly out of date as a result — written 2026-09-27, before this
-button existed:
+while building it are now resolved: the WSL test server's own
+instability (worked around with a confirmed fix — keep one WSL session
+open while working, see "Found and worked around" just above) and one
+customer's corrupted name in Odoo (fixed directly on the Odoo record).
+Separately, the same session picked up priority 1 from the "Where a
+future session should pick this up" list below:
+`ambiguous_decimal_point` cut from 134 to 86 (see "Fixed (2026-09-28)"
+above that list) by measuring true 2D distance to the nearest digit
+instead of horizontal-only distance — verified against all 96 scans
+with zero value changes anywhere, only flags. What follows below is
+slightly out of date as a result — written 2026-09-27, before either of
+2026-09-28's fixes:
 
 saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
