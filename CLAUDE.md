@@ -717,10 +717,18 @@ in order:
    (73), `no_decimal_point` (60), `possible_split_digit` (46), and
    `possible_merged_digits` (12) are all down to a size where they may
    already be trustworthy signals — worth a quick real-crop spot check
-   before assuming so, rather than further tuning blind. (The
-   `unreadable_ink` pattern above -- checking whether a flag correlates
-   with `line_quantity == 0` -- is a cheap first check worth applying to
-   each of these too, before assuming a fix needs new pixel-level logic.)
+   before assuming so, rather than further tuning blind. **Already
+   checked, ruled out**: the `unreadable_ink` fix's own trick --
+   checking whether a flag correlates with `line_quantity == 0` -- was
+   tried against all five. `possible_merged_digits` does correlate (83%,
+   10 of 12), but every one of those 10 already carries
+   `total_price_without_quantity` too, so the row stays flagged either
+   way -- suppressing it wouldn't reduce how many rows need review, only
+   shorten their flag lists. The other four don't correlate strongly
+   enough with `line_quantity == 0` (2%-41%) for this particular trick
+   to apply at all. A real fix for any of these five would need actual
+   per-flag investigation (real crops, real measurement), the same as
+   every fix earlier in this session -- not assumed from this shortcut.
 3. Once Total Price's flag rate is actually informative, the remaining
    build order from before still holds: a quick "send to Odoo" button
    on `review_screen.py`, then the full Odoo module (see "Decisions"
