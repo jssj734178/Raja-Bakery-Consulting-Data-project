@@ -3,99 +3,123 @@
   "rows": [
     {
       "row_index": 0,
-      "product_name": "Wonder Bread White/Brown (675g)"
+      "product_name": "Wonder Bread White/Brown (675g)",
+      "odoo_product_id": 1
     },
     {
       "row_index": 1,
-      "product_name": "Dempster Bread White (675g)"
+      "product_name": "Dempster Bread White (675g)",
+      "odoo_product_id": 2
     },
     {
       "row_index": 2,
-      "product_name": "Dempster Bread Brown (675g)"
+      "product_name": "Dempster Bread Brown (675g)",
+      "odoo_product_id": 3
     },
     {
       "row_index": 3,
-      "product_name": "Dempster Texas Sandwich White Bread (675g)"
+      "product_name": "Dempster Texas Sandwich White Bread (675g)",
+      "odoo_product_id": 4
     },
     {
       "row_index": 4,
-      "product_name": "Dempster Thin Sandwich White Bread (675g)"
+      "product_name": "Dempster Thin Sandwich White Bread (675g)",
+      "odoo_product_id": 5
     },
     {
       "row_index": 5,
-      "product_name": "Dempster Hamburger Buns 8Pk"
+      "product_name": "Dempster Hamburger Buns 8Pk",
+      "odoo_product_id": 6
     },
     {
       "row_index": 6,
-      "product_name": "Dempster Signature Buns 8Pk"
+      "product_name": "Dempster Signature Buns 8Pk",
+      "odoo_product_id": 7
     },
     {
       "row_index": 7,
-      "product_name": "Dempster Hotdog Buns 8pk"
+      "product_name": "Dempster Hotdog Buns 8pk",
+      "odoo_product_id": 8
     },
     {
       "row_index": 8,
-      "product_name": "Dempster Whole Grain 12 Grains (600g)"
+      "product_name": "Dempster Whole Grain 12 Grains (600g)",
+      "odoo_product_id": 9
     },
     {
       "row_index": 9,
-      "product_name": "Dempster Whole Grain Multigrain (600g)"
+      "product_name": "Dempster Whole Grain Multigrain (600g)",
+      "odoo_product_id": 10
     },
     {
       "row_index": 10,
-      "product_name": "Villaggio Bread (675g)"
+      "product_name": "Villaggio Bread (675g)",
+      "odoo_product_id": 11
     },
     {
       "row_index": 11,
-      "product_name": "Dempster Everything Bagel 6pk"
+      "product_name": "Dempster Everything Bagel 6pk",
+      "odoo_product_id": 12
     },
     {
       "row_index": 12,
-      "product_name": "Dempster Cinnamon Raisin Bagel 6pk"
+      "product_name": "Dempster Cinnamon Raisin Bagel 6pk",
+      "odoo_product_id": 13
     },
     {
       "row_index": 13,
-      "product_name": "Dempster 12 Grain Bagel 6pk"
+      "product_name": "Dempster 12 Grain Bagel 6pk",
+      "odoo_product_id": 14
     },
     {
       "row_index": 14,
-      "product_name": "Dempster Original Bagel 6pk"
+      "product_name": "Dempster Original Bagel 6pk",
+      "odoo_product_id": 15
     },
     {
       "row_index": 15,
-      "product_name": "Tortilla Wrap Brown 10 Pk"
+      "product_name": "Tortilla Wrap Brown 10 Pk",
+      "odoo_product_id": 16
     },
     {
       "row_index": 16,
-      "product_name": "Tortilla Wrap White 10 Pk"
+      "product_name": "Tortilla Wrap White 10 Pk",
+      "odoo_product_id": 17
     },
     {
       "row_index": 17,
-      "product_name": "Pav Bhaji Buns Whole Wheat 12pk (500g)"
+      "product_name": "Pav Bhaji Buns Whole Wheat 12pk (500g)",
+      "odoo_product_id": 18
     },
     {
       "row_index": 18,
-      "product_name": "Pav Bhaji Buns White 12pk (500g)"
+      "product_name": "Pav Bhaji Buns White 12pk (500g)",
+      "odoo_product_id": 21
     },
     {
       "row_index": 19,
-      "product_name": "Dabeli Buns (750g)"
+      "product_name": "Dabeli Buns (750g)",
+      "odoo_product_id": 22
     },
     {
       "row_index": 20,
-      "product_name": "Dempster's Rye Loaf Harvest Pumpernickel (450g)"
+      "product_name": "Dempster's Rye Loaf Harvest Pumpernickel (450g)",
+      "odoo_product_id": 23
     },
     {
       "row_index": 21,
-      "product_name": "Twinkies/Cupcakes"
+      "product_name": "Twinkies/Cupcakes",
+      "odoo_product_id": null
     },
     {
       "row_index": 22,
-      "product_name": "Lune Moon Cake"
+      "product_name": "Lune Moon Cake",
+      "odoo_product_id": null
     },
     {
       "row_index": 23,
-      "product_name": "Taki Chips"
+      "product_name": "Taki Chips",
+      "odoo_product_id": null
     }
   ]
 }

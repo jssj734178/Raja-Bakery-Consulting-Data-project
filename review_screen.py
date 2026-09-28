@@ -45,9 +45,9 @@ not as direct imports, specifically so this screen's own fast startup
 is never affected by them; only clicking that button pays their ~20+
 second model-loading cost, and the window stays responsive while it
 runs. This is the quick, desktop-only way to feed a new scan through the
-pipeline described in CLAUDE.md's "Also planned, not yet started" --
-useful now, while the real long-term intake path (an Odoo module) is
-still being built.
+pipeline described in CLAUDE.md's "Next to build: getting this into
+Odoo" -- useful now, while the real long-term intake path (an Odoo
+module) is still being built.
 
 The invoice's own handwritten date and its printed invoice number
 (top bar, next to Customer) are both typed in by hand for now rather
@@ -60,11 +60,20 @@ before approving; the invoice number is allowed to stay blank, since
 CLAUDE.md notes it may sometimes be cut off, obscured, or missing on a
 given scan.
 
-Deliberately does NOT talk to Odoo. Approving an invoice here writes a
-review.json (customer, invoice date, invoice number, corrected values,
-which fields were originally flagged) next to that invoice's
-results.json -- reading that file and pushing it into Odoo is a
-separate piece, built separately.
+Approving writes a review.json (customer, invoice date, invoice number,
+corrected values, which fields were originally flagged) next to that
+invoice's results.json. Talking to Odoo itself is kept in a separate
+file, send_to_odoo.py, imported here only for the "Send to Odoo" button
+-- that keeps this screen's own imports light (see above) and keeps the
+actual Odoo business rules (which rows become invoice lines, what gets
+blocked, what gets a warning note) readable on their own rather than
+tangled into this file's widget code. Clicking that button re-runs the
+same save as Approve & Save (so what's sent always matches what's on
+screen) and then pushes to Odoo in a background thread, the same
+pattern Upload PDF uses, so the window doesn't freeze while waiting on
+the network. Once sent, the invoice's Odoo draft number is recorded in
+its review.json and the button disables itself, so the same invoice
+can't be sent to Odoo a second time by accident.
 
 Approving also banks digit pictures for future retraining: for every
 Qty/Return/Total Price field the reviewer leaves BOTH unflagged and
@@ -103,6 +112,8 @@ from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
+
+from send_to_odoo import SendToOdooError, send_invoice
 
 EXTRACTIONS_DIR = "extractions"
 CUSTOMERS_PATH = "customers.json"
@@ -324,6 +335,16 @@ class ReviewScreen:
             bg="#2e7d32", fg="white", font=("Helvetica", 10, "bold"),
         )
         self.approve_button.pack(side=tk.RIGHT)
+        # Saves (same as Approve & Save, so what's sent always matches
+        # what's on screen -- see _send_to_odoo) and then pushes to the
+        # live Odoo server, so this is deliberately a separate, later
+        # step a reviewer takes on purpose, not something that happens
+        # automatically just from approving locally.
+        self.send_to_odoo_button = tk.Button(
+            bottom, text="Send to Odoo", command=self._send_to_odoo,
+            bg="#1565c0", fg="white", font=("Helvetica", 10, "bold"),
+        )
+        self.send_to_odoo_button.pack(side=tk.RIGHT, padx=(0, 8))
 
     def _on_mouse_wheel(self, event):
         """Mouse wheel scrolled over the row list: scroll it vertically."""
@@ -347,6 +368,7 @@ class ReviewScreen:
                 fg="#444444", font=("Helvetica", 11),
             ).pack(anchor="w", pady=30, padx=10)
             self.approve_button.config(state=tk.DISABLED)
+            self.send_to_odoo_button.config(state=tk.DISABLED)
             self.status_label.config(text="No invoices loaded")
             return
 
@@ -369,6 +391,12 @@ class ReviewScreen:
         self.customer_var.set(existing_review["customer"] if existing_review else "")
         self.invoice_date_var.set(existing_review.get("invoice_date", "") if existing_review else "")
         self.invoice_number_var.set(existing_review.get("paper_invoice_number", "") if existing_review else "")
+        # Carried forward on every re-save (see _build_review_dict) so
+        # that re-approving an invoice after it's been sent to Odoo
+        # can't accidentally clear the record of that -- see
+        # send_to_odoo.send_invoice, which refuses to send an invoice
+        # a second time while this is set.
+        self.odoo_invoice_id = existing_review.get("odoo_invoice_id") if existing_review else None
 
         if self.results.get("invoice_flagged"):
             reason = self.results.get("reason")
@@ -382,10 +410,16 @@ class ReviewScreen:
                 fg="#b71c1c", justify=tk.LEFT, wraplength=900, font=("Helvetica", 11),
             ).pack(anchor="w", pady=30, padx=10)
             self.approve_button.config(state=tk.DISABLED)
+            self.send_to_odoo_button.config(state=tk.DISABLED)
             self._update_status(flagged_invoice=True)
             return
 
         self.approve_button.config(state=tk.NORMAL)
+        # Sending is blocked once an invoice has already been sent
+        # once (see send_to_odoo.send_invoice's own guard) -- the
+        # button itself reflects that immediately, rather than letting
+        # a reviewer click it and only find out from an error popup.
+        self.send_to_odoo_button.config(state=tk.DISABLED if self.odoo_invoice_id else tk.NORMAL)
         existing_rows_by_index = (
             {r["row_index"]: r for r in existing_review["rows"]} if existing_review else {}
         )
@@ -560,7 +594,12 @@ class ReviewScreen:
     def _update_status(self, flagged_invoice: bool):
         """Refresh the status label: position in the list, review state, and (if applicable) how many rows are flagged."""
         name = self.invoice_names[self.index]
-        already_approved = " (already approved)" if os.path.exists(self.review_path) else ""
+        if self.odoo_invoice_id:
+            already_approved = f" (sent to Odoo as draft invoice #{self.odoo_invoice_id})"
+        elif os.path.exists(self.review_path):
+            already_approved = " (already approved)"
+        else:
+            already_approved = ""
         position = f"[{self.index + 1}/{len(self.invoice_names)}] {name}{already_approved}"
         if flagged_invoice:
             self.status_label.config(text=f"{position} -- needs manual handling")
@@ -702,13 +741,87 @@ class ReviewScreen:
         self.customer_var.set(self._resolve_customer_name(self.customer_var.get()))
 
     def approve_and_save(self):
+        """Validate every field on screen and write review.json, then confirm with a popup."""
+        invoice_name = self._save_review()
+        if invoice_name:
+            messagebox.showinfo("Saved", f"Saved review for '{invoice_name}'.")
+
+    def _send_to_odoo(self):
         """
-        Validate every field on screen, then write review.json:
-        the chosen customer, and each row's corrected Qty/Return/line
-        quantity alongside what the software originally read and
-        whether it had flagged that field -- so the piece that
-        eventually pushes this into Odoo (not built here) has both the
+        Save the review first -- exactly what Approve & Save does, run
+        again here so whatever gets pushed to Odoo always matches
+        what's currently on screen, even if something was edited since
+        the last explicit Approve & Save click -- then push it to the
+        live Odoo server. The actual network call runs in a background
+        thread (see _run_send_to_odoo), the same way Upload PDF does,
+        so the window stays responsive rather than freezing for however
+        long the connection takes.
+        """
+        invoice_name = self._save_review()
+        if not invoice_name:
+            return
+        self.send_to_odoo_button.config(state=tk.DISABLED)
+        self.approve_button.config(state=tk.DISABLED)
+        self.status_label.config(text=f"Sending '{invoice_name}' to Odoo...")
+        thread = threading.Thread(target=self._run_send_to_odoo, args=(invoice_name,), daemon=True)
+        thread.start()
+
+    def _run_send_to_odoo(self, invoice_name: str):
+        """The actual Odoo push, run off the main thread. Schedules _on_send_to_odoo_finished back onto the main thread with the outcome, since tkinter widgets may only be touched from the thread that created them."""
+        try:
+            result = send_invoice(invoice_name)
+        except SendToOdooError as e:
+            # A deliberate, expected stopping point (see that class's
+            # own docstring) -- e.g. a missing price, an unmatched
+            # product, an already-sent invoice -- so its message is
+            # written to be read directly by the reviewer as-is.
+            self.root.after(0, self._on_send_to_odoo_finished, invoice_name, None, str(e))
+            return
+        except Exception as e:
+            # Anything else -- most likely the Odoo server being
+            # unreachable -- isn't a message meant for a reviewer to
+            # read as-is, so it's wrapped with enough context to know
+            # what was being attempted.
+            self.root.after(0, self._on_send_to_odoo_finished, invoice_name, None, f"Could not reach Odoo: {e}")
+            return
+        self.root.after(0, self._on_send_to_odoo_finished, invoice_name, result, None)
+
+    def _on_send_to_odoo_finished(self, invoice_name: str, result: dict, error: str):
+        """Back on the main thread: report the outcome, and on success, record the new Odoo invoice ID so this invoice can't be sent a second time by accident."""
+        self.approve_button.config(state=tk.NORMAL)
+        if error:
+            self.send_to_odoo_button.config(state=tk.NORMAL)
+            messagebox.showerror("Could not send to Odoo", error)
+            return
+
+        # If the reviewer navigated to a different invoice while the
+        # send was in flight, don't touch this screen's own state --
+        # the result already got written to the right invoice's
+        # review.json inside send_invoice() regardless of what's on
+        # screen right now.
+        if self.invoice_names[self.index] == invoice_name:
+            self.odoo_invoice_id = result["odoo_invoice_id"]
+            self._update_status(flagged_invoice=False)
+        else:
+            self.send_to_odoo_button.config(state=tk.NORMAL)
+
+        message = f"Sent '{invoice_name}' to Odoo as draft invoice #{result['odoo_invoice_id']}."
+        if result["warning"]:
+            message += "\n\n" + result["warning"]
+        messagebox.showinfo("Sent to Odoo", message)
+
+    def _save_review(self):
+        """
+        Validate every field on screen, then write review.json: the
+        chosen customer, and each row's corrected Qty/Return/Total
+        Price alongside what the software originally read and whether
+        it had flagged that field -- so send_to_odoo.send_invoice (and
+        anyone re-opening this invoice later) has both the
         human-approved numbers and a record of what got corrected.
+
+        Returns this invoice's name on success, or None if something
+        on screen was invalid (an error popup has already been shown
+        in that case, and nothing was written).
         """
         if self.results.get("invoice_flagged"):
             # Belt and suspenders: the Approve button is already disabled
@@ -831,12 +944,19 @@ class ReviewScreen:
             "approved": True,
             "reviewed_at": datetime.now().isoformat(timespec="seconds"),
             "rows": rows_out,
+            # Carried forward as-is, not recomputed -- this method never
+            # sets it itself, only _on_send_to_odoo_finished does, once
+            # an actual Odoo push has succeeded. Without carrying it
+            # forward here, a plain re-approve (with no Odoo push
+            # involved at all) would silently erase the record of an
+            # earlier successful send.
+            "odoo_invoice_id": self.odoo_invoice_id,
         }
         with open(self.review_path, "w") as f:
             json.dump(review, f, indent=2)
 
-        messagebox.showinfo("Saved", f"Saved review for '{invoice_name}'.")
         self._update_status(flagged_invoice=False)
+        return invoice_name
 
     def _bank_digit_crops(self, invoice_dir: str, invoice_name: str, digit_crops: list):
         """

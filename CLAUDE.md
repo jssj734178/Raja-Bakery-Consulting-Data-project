@@ -17,14 +17,17 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
+| `match_odoo_products.py` | 60 | 28 | 21 | 11 |
 | `model.py` | 122 | 22 | 84 | 16 |
+| `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 897 | 458 | 350 | 89 |
+| `review_screen.py` | 1017 | 512 | 409 | 96 |
+| `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5380** | **2192** | **2592** | **596** |
+| **Total** | **5899** | **2415** | **2837** | **647** |
 
-*Last updated: 2026-09-27.*
+*Last updated: 2026-09-28.*
 
 ## What this is
 
@@ -51,7 +54,7 @@ The scripts form a sequential pipeline, each a standalone CLI entry point (`pyth
 
 ## Production inference pipeline (in progress)
 
-A second pipeline, separate from the training pipeline above, for applying the finished fine-tuned model to NEW invoices going forward — the system that automatically extracts quantities from a scanned invoice rather than the system that built the model in the first place. Design: fixed pre-printed invoice template, so product identity comes from row POSITION (not OCR); a one-time calibration records each row's Qty/Return cell positions as proportions of the table border, reused on every future scan via that scan's own freshly-detected border (no full geometric image warp needed); Return is subtracted from Qty per row; low-confidence/ambiguous reads are flagged for human review rather than guessed. Calibration is complete and verified (`template_calibration.json` + `product_rows.json`, both checked into git). Per-invoice extraction (`extract_invoice.py` + `digit_reader.py`) is built and working — the segmentation bug that previously made its output untrustworthy is fixed and verified against hand-read ground truth (see "Known issues" below for what was wrong and what residuals remain). The human review screen (`review_screen.py`) is also built and working, up to a person approving an invoice locally — see "The human review screen: requirements and decisions" below. Only getting this into Odoo remains — see "Next to build: getting this into Odoo" below.
+A second pipeline, separate from the training pipeline above, for applying the finished fine-tuned model to NEW invoices going forward — the system that automatically extracts quantities from a scanned invoice rather than the system that built the model in the first place. Design: fixed pre-printed invoice template, so product identity comes from row POSITION (not OCR); a one-time calibration records each row's Qty/Return cell positions as proportions of the table border, reused on every future scan via that scan's own freshly-detected border (no full geometric image warp needed); Return is subtracted from Qty per row; low-confidence/ambiguous reads are flagged for human review rather than guessed. Calibration is complete and verified (`template_calibration.json` + `product_rows.json`, both checked into git). Per-invoice extraction (`extract_invoice.py` + `digit_reader.py`) is built and working — the segmentation bug that previously made its output untrustworthy is fixed and verified against hand-read ground truth (see "Known issues" below for what was wrong and what residuals remain). The human review screen (`review_screen.py`) is also built and working, up to a person approving an invoice locally — see "The human review screen: requirements and decisions" below. A "Send to Odoo" button on that screen (built 2026-09-28, see `send_to_odoo.py`) now pushes an approved invoice into Odoo as a draft invoice, verified working against the live test server — see "Next to build: getting this into Odoo" below for what that button does and doesn't cover, and how it fits alongside the still-unstarted full Odoo module.
 
 
 ### Plain-language glossary
@@ -257,6 +260,124 @@ eventually sends approved invoices to Odoo to read. That URL is WSL's
 own IP, which can change if WSL restarts; re-check with
 `wsl -d Ubuntu -e bash -c "hostname -I"` if the connection ever stops
 working.
+
+**Built (2026-09-28): the desktop "Send to Odoo" button — the first
+piece that actually pushes an approved invoice into Odoo.** Three new
+files, kept as separate layers the same way the rest of this pipeline
+is (a raw connection, business rules, then the UI):
+
+- **[odoo_client.py](odoo_client.py)** — a thin wrapper around talking to
+  Odoo over XML-RPC (Odoo's own remote-control interface, built into
+  Python already, no extra library needed): logging in, looking up a
+  product or a customer by name, checking whether a paper invoice
+  number has already been used, and creating a draft invoice. Reads
+  the server address, database name, and login from
+  `odoo_settings.local.json`, same as before.
+- **[match_odoo_products.py](match_odoo_products.py)** — a one-time (but
+  safe to re-run) setup script that looks up each of this project's 24
+  products by name in Odoo and saves the matching Odoo product ID back
+  into `product_rows.json`, so the actual per-invoice push never has to
+  search by name at all — it just reads the number this script already
+  found. Already run once against the live test server: **21 of 24
+  matched** — the 3 that didn't are exactly Twinkies/Cupcakes, Lune Moon
+  Cake, and Taki Chips, which Jagbir already said aren't being sold
+  yet, so that's expected, not a bug. The lookup is
+  case-insensitive and reports when Odoo's own spelling differs
+  slightly (found twice: "675g" vs "675G", "Whole Grain" vs "Whole
+  grain") — worth knowing about, but not something the code needs to
+  fix, since matching still succeeds either way.
+- **[send_to_odoo.py](send_to_odoo.py)** — the actual business rules for
+  turning one approved invoice into a draft Customer Invoice
+  (`account.move`) in Odoo, matching every decision already written
+  down above: no stock movement, draft not finalized, one line per
+  product row with quantity = Qty − Return and price = that row's own
+  derived unit price (Total Price ÷ line quantity, never a price
+  list), the paper invoice number saved as the invoice's reference for
+  the free duplicate check, and a plain warning note (not a negative
+  line, not a credit note) attached to the invoice when a row shows
+  more returned than ordered.
+- **review_screen.py** gained a "Send to Odoo" button next to Approve &
+  Save. Clicking it re-runs the same save-and-validate step Approve &
+  Save does (so whatever gets sent always matches what's actually on
+  screen, even if something was edited since the last explicit Approve
+  click) and then pushes to Odoo in a background thread, the same
+  pattern Upload PDF already uses, so the window doesn't freeze while
+  waiting on the network. Once sent, the invoice's own Odoo draft
+  number is saved back into its `review.json` and the button disables
+  itself — sending the same invoice a second time is blocked with a
+  clear message rather than silently creating a duplicate draft in
+  Odoo, unless someone edits `review.json` by hand to clear it.
+
+**Decided (2026-09-28): a row with a quantity but no readable Total
+Price blocks the whole send, rather than going through priced at $0.**
+This can happen on a rare row where the price genuinely couldn't be
+read (see `unreadable_ink` and similar flags). Sending it through
+anyway risked a real invoice line reaching Odoo priced at nothing, with
+only a flag (not a hard stop) standing between that and an actual
+customer being under-billed if nobody caught it before the draft got
+posted. Blocking is more friction but safer by default — the price is
+already an editable field in the review screen, so fixing it before
+sending is one extra step, not a separate tool.
+
+**Verified end-to-end against the live test server**, using one of the
+96 real scanned pages, re-extracted fresh so its Total Price fields were
+actually populated (its original `results.json` on disk predated Total
+Price reading entirely, from before 2026-09-26): a simulated approval
+(one obviously-misread row, `$4000.00` for 16 units, corrected to
+nothing — the kind of fix a real reviewer would make) produced a
+correct draft invoice in Odoo with the right customer, date, reference
+number, and line prices, read back and checked field-by-field rather
+than just trusted from a success message. The already-sent guard, the
+missing-price block, and the over-returned warning note were each
+tested separately too — including confirming the warning note actually
+lands as real text on the invoice in Odoo, not just returned by the
+Python code. All test draft invoices created during this were deleted
+afterward, and the one real invoice's test `review.json` (fake
+customer/date, used only to exercise the code) was removed rather than
+left looking like a genuine approval.
+
+**Found while testing (2026-09-28), not yet fixed — the WSL test
+server is unreliable to develop against right now.** The WSL virtual
+machine that runs the Odoo/Postgres containers shuts itself down
+whenever nothing on the Windows side has used it for a short while, and
+restarting it (which happens automatically the moment something tries
+to reach it again) takes several seconds and briefly drops any
+in-progress connection — this showed up as a plain "connection refused"
+error mid-test, twice, with the containers' own logs confirming
+Postgres was mid-shutdown at that exact moment. Not a bug in any of the
+new code, and the eventual Mac deployment won't have this problem at
+all (Docker there won't be sitting inside a virtual machine that
+auto-suspends this way) — but it will keep interrupting work against
+*this* test server specifically until it's addressed, e.g. by turning
+off WSL's idle shutdown or simply keeping a WSL terminal window open
+while working. A short list of small Bash commands worked around it for
+this session's own testing (holding a `wsl -d Ubuntu -e bash -c "sleep
+N"` running in the background), but that's a workaround, not a fix.
+
+**Found while testing (2026-09-28), not yet fixed — one customer's name
+is corrupted in Odoo.** "Zaika's Shawarma" is stored there with its
+apostrophe turned into an unreadable character (`Zaika�s Shawarma`
+— a `�` is what a computer shows when it tried to read text using
+the wrong encoding and hit a byte it couldn't make sense of), almost
+certainly from an encoding mismatch when the customer list was first
+typed into Odoo. Because `send_to_odoo.py` is designed to automatically
+create a brand-new contact for any customer name it can't find an exact
+match for (per the "one-off customer" decision above), sending an
+invoice for this customer right now would create a *second*,
+duplicate "Zaika's Shawarma" contact rather than reuse the real one —
+quietly splitting that customer's invoice history across two records.
+A two-second fix directly in Odoo (retyping the name) resolves this;
+nothing in this project's own code needs to change.
+
+**Not yet built:** the fallback when a product genuinely doesn't have
+Odoo match yet (currently blocks the whole send with a list of which
+products, matching the missing-price decision above, but not yet tried
+against a real case since all 21 sellable products already matched
+cleanly); and everything from "Next to build: getting this into Odoo"
+below that isn't this button — chiefly, the full Odoo module itself.
+This button is explicitly the "quick way to start real value flowing
+while the module is still being built" step, not the final home for
+this feature.
 
 **Built (2026-09-25): banking verified-correct crops as future training
 data.** When a reviewer leaves a field unflagged and uncorrected,
@@ -817,7 +938,20 @@ Windows machine):
   installable that way, since it's currently loose top-level scripts
   that import each other directly.
 
-**Status as of 2026-09-27:** saving digit pictures for retraining
+**Status as of 2026-09-28:** the desktop "Send to Odoo" button described
+above is built and verified end-to-end against the live test server —
+real value can now flow from an approved invoice into an Odoo draft
+invoice, ahead of schedule relative to the plan below (which had it
+waiting on Total Price's flag rate coming down first). Two things found
+while building it are worth a look before relying on it day-to-day: the
+WSL test server's own instability (a development annoyance, not
+expected on the eventual Mac), and one customer's corrupted name in
+Odoo (a two-second manual fix, not a code change) — see the "Found
+while testing" notes just above for both. What follows below is
+slightly out of date as a result — written 2026-09-27, before this
+button existed:
+
+saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
 (2026-09-26) is built; seven real bugs behind its flag rate were found
 and fixed the same session (2026-09-27) — decimal-point detection
@@ -840,8 +974,10 @@ changing zero actual Total Price or unit-price values, only which ones
 get flagged). Within reach of Qty/Return's own ~39%.
 `ambiguous_decimal_point` (now representing genuine ambiguity rather
 than moot ties) is still the largest remaining flag and the next thing
-worth a look (see "Where a future session should pick this up," above),
-ahead of the desktop "send to Odoo" button and the full Odoo module.
+worth a look (see "Where a future session should pick this up," above).
+The desktop "Send to Odoo" button mentioned as still-ahead here was
+actually built the next session (2026-09-28) without waiting on this —
+see the status note just above.
 
 ## Information needed from Jagbir to finish the build (listed 2026-09-24, answered 2026-09-25)
 
