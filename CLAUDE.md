@@ -13,7 +13,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_reader.py` | 1174 | 342 | 734 | 98 |
-| `extract_invoice.py` | 642 | 288 | 295 | 59 |
+| `extract_invoice.py` | 657 | 290 | 307 | 60 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -22,7 +22,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `review_screen.py` | 713 | 370 | 272 | 71 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5181** | **2102** | **2502** | **577** |
+| **Total** | **5196** | **2104** | **2514** | **578** |
 
 *Last updated: 2026-09-27.*
 
@@ -670,12 +670,39 @@ values changed (by construction -- this only resolves ties where both
 choices already agreed on the value). `ambiguous_decimal_point` drops
 from 212 to **134** fields.
 
+**Fixed (2026-09-27, same session): `unreadable_ink` was firing almost
+entirely on rows where nothing was ordered at all.** It was the second-
+largest remaining flag (85 fields). Checked directly: every field
+sampled by hand had `line_quantity == 0` -- a row where no product was
+recorded as ordered at all. Measured across all 96 scans, that held for
+**93% of them (79 of 85)**.
+
+This one isn't a segmentation bug like the others -- the ink genuinely
+couldn't be classified as a digit, and flagging that is technically
+correct. The fix is a row-level business-logic point instead, made in
+`extract_invoice.py` rather than `digit_reader.py`: a row with nothing
+ordered (`line_quantity == 0`) never gets a unit price regardless of
+what's in its Total Price box (the division is already gated on
+`line_quantity > 0`), so ambiguous leftover ink there can never actually
+affect anything downstream. `total_price_without_quantity` (kept,
+untouched) already covers the genuinely meaningful sibling case -- a
+CONCRETE price was read despite no recorded order, which is worth a
+look; `unreadable_ink` on a `line_quantity == 0` row is just paper
+grain with nothing at stake.
+
+Verified across all 96 scans: zero Qty/Return impact, zero Total Price
+or unit-price values changed (pure flag suppression, gated only on a
+field already computed for other reasons). `unreadable_ink` drops from
+85 to **6** -- exactly the cases where a real order (`line_quantity > 0`)
+had a genuinely unreadable price, which stay flagged as they should.
+
 **Where a future session should pick this up (left off 2026-09-27).**
-Five real bugs fixed this session take Total Price's real review
-burden — flagged cells across ALL 2,304 cells, not just filled ones —
-from effectively 100% at the start down to **17.9%**, and
-flagged-of-filled from 97.2% down to **49.2%**. Within reach of
-Qty/Return's own ~39%. Priority, in order:
+Six real bugs fixed this session take Total Price's overall flagged
+count — across ALL 2,304 cells, not just filled ones — from effectively
+100% at the start down to **14.5%**, and flagged-of-filled from 97.2%
+down to **49.2%** (unchanged by this particular fix, since it only
+touched blank cells). Within reach of Qty/Return's own ~39%. Priority,
+in order:
 
 1. **`ambiguous_decimal_point` (134 fields) is still the largest flag
    left**, now representing genuine ambiguity (two well-separated
@@ -686,11 +713,14 @@ Qty/Return's own ~39%. Priority, in order:
    -- e.g. preferring whichever candidate sits closer to the cell's
    vertical middle, where a decimal point usually sits relative to a
    digit's baseline -- could resolve more of them.
-2. The remaining `unreadable_ink` (85), `total_price_without_quantity`
-   (77), `low_confidence` (73), `no_decimal_point` (60), and
-   `possible_split_digit` (46) are all down to a size where they may
+2. The remaining `total_price_without_quantity` (77), `low_confidence`
+   (73), `no_decimal_point` (60), `possible_split_digit` (46), and
+   `possible_merged_digits` (12) are all down to a size where they may
    already be trustworthy signals — worth a quick real-crop spot check
-   before assuming so, rather than further tuning blind.
+   before assuming so, rather than further tuning blind. (The
+   `unreadable_ink` pattern above -- checking whether a flag correlates
+   with `line_quantity == 0` -- is a cheap first check worth applying to
+   each of these too, before assuming a fix needs new pixel-level logic.)
 3. Once Total Price's flag rate is actually informative, the remaining
    build order from before still holds: a quick "send to Odoo" button
    on `review_screen.py`, then the full Odoo module (see "Decisions"
@@ -744,22 +774,25 @@ Windows machine):
 
 **Status as of 2026-09-27:** saving digit pictures for retraining
 (2026-09-25) is done. Total Price reading / unit price derivation
-(2026-09-26) is built; six real bugs behind its flag rate were found
+(2026-09-26) is built; seven real bugs behind its flag rate were found
 and fixed the same session (2026-09-27) — decimal-point detection
 re-tuned to use position instead of size, a printed-line-residue bug
 (misread as a stray digit, or welded onto a real digit or decimal
 point, fixed in two parts), a flag (`possible_split_digit`) firing on
 correct reads 86% of the time, a second flag (`possible_merged_digits`)
 using a Qty/Return-only threshold that never fit Total Price's own
-wider digit shapes, and a third flag (`ambiguous_decimal_point`) firing
-on ties that didn't actually change the answer 37% of the time. Together
-these cut Total Price's real review burden, across every cell not just
-filled ones, from effectively 100% at the start of the session to
-**17.9%**, and flagged-of-filled from 97.2% down to **49.2%** — real,
-verified progress at every step (each fix checked against a full
-96-scan before/after run, with zero Qty/Return impact throughout, and
-the last three fixes changing zero actual Total Price values, only
-which ones get flagged). Within reach of Qty/Return's own ~39%.
+wider digit shapes, a third flag (`ambiguous_decimal_point`) firing on
+ties that didn't actually change the answer 37% of the time, and a
+fourth flag (`unreadable_ink`) firing 93% of the time on rows where
+nothing was ordered at all (a row-level business-logic fix in
+`extract_invoice.py`, not a pixel-level one). Together these cut Total
+Price's overall flagged count, across every cell not just filled ones,
+from effectively 100% at the start of the session to **14.5%**, and
+flagged-of-filled from 97.2% down to **49.2%** — real, verified progress
+at every step (each fix checked against a full 96-scan before/after
+run, with zero Qty/Return impact throughout, and the last four fixes
+changing zero actual Total Price or unit-price values, only which ones
+get flagged). Within reach of Qty/Return's own ~39%.
 `ambiguous_decimal_point` (now representing genuine ambiguity rather
 than moot ties) is still the largest remaining flag and the next thing
 worth a look (see "Where a future session should pick this up," above),
