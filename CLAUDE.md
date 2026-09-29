@@ -879,22 +879,28 @@ in order:
    -- e.g. preferring whichever candidate sits closer to the cell's
    vertical middle, where a decimal point usually sits relative to a
    digit's baseline -- could resolve more of them.
-2. The remaining `total_price_without_quantity` (77), `low_confidence`
+2. Of the remaining `total_price_without_quantity` (77), `low_confidence`
    (73), `no_decimal_point` (60), `possible_split_digit` (46), and
-   `possible_merged_digits` (12) are all down to a size where they may
-   already be trustworthy signals — worth a quick real-crop spot check
-   before assuming so, rather than further tuning blind. **Already
-   checked, ruled out**: the `unreadable_ink` fix's own trick --
-   checking whether a flag correlates with `line_quantity == 0` -- was
-   tried against all five. `possible_merged_digits` does correlate (83%,
-   10 of 12), but every one of those 10 already carries
-   `total_price_without_quantity` too, so the row stays flagged either
-   way -- suppressing it wouldn't reduce how many rows need review, only
-   shorten their flag lists. The other four don't correlate strongly
-   enough with `line_quantity == 0` (2%-41%) for this particular trick
-   to apply at all. A real fix for any of these five would need actual
-   per-flag investigation (real crops, real measurement), the same as
-   every fix earlier in this session -- not assumed from this shortcut.
+   `possible_merged_digits` (12): **`low_confidence` is now checked and
+   confirmed to be a legitimate signal, not a bug** (see "Checked
+   (2026-09-28)" below), and **`total_price_without_quantity` has a
+   real, confirmed root cause but no safe fix yet** (a printed line
+   surviving removal and getting misread as a digit — see "Investigated
+   (2026-09-28)" below for what was tried and why straightness, not
+   size or density, is the next avenue worth trying). `no_decimal_point`,
+   `possible_split_digit`, and `possible_merged_digits` are still
+   unchecked. **Already checked, ruled out**: the `unreadable_ink` fix's
+   own trick -- checking whether a flag correlates with
+   `line_quantity == 0` -- was tried against all five. `possible_merged_digits`
+   does correlate (83%, 10 of 12), but every one of those 10 already
+   carries `total_price_without_quantity` too, so the row stays flagged
+   either way -- suppressing it wouldn't reduce how many rows need
+   review, only shorten their flag lists. The other four don't
+   correlate strongly enough with `line_quantity == 0` (2%-41%) for this
+   particular trick to apply at all. A real fix for the three still-
+   unchecked flags would need actual per-flag investigation (real crops,
+   real measurement), the same as every fix earlier in this session --
+   not assumed from this shortcut.
 3. Once Total Price's flag rate is actually informative, the remaining
    build order from before still holds: a quick "send to Odoo" button
    on `review_screen.py`, then the full Odoo module (see "Decisions"
@@ -970,6 +976,64 @@ flagged-of-filled is down to **42.2%** (253 of 600, down from 49.2%) --
 getting closer to Qty/Return's own ~39%, though the remaining flags are
 a harder, more genuinely-ambiguous residue than the ones already
 resolved.
+
+**Checked (2026-09-28), picking up priority 2 from the list above:
+`low_confidence` (73) is a legitimate signal, not a bug — no fix
+made.** Unlike every flag fixed so far this session, this one doesn't
+show the "correct read wrongly flagged" pattern. Checked against each
+product's own most common (modal) unit price elsewhere in the corpus,
+the same technique that confirmed the `possible_merged_digits` fix: of
+the 30 fields flagged for `low_confidence` alone, 24 (80%) have a unit
+price wildly different from that product's normal price — some over
+$1,500/unit, plainly wrong reads — while the model's own confidence
+score correctly tracks that (these are exactly the cells it read as
+low-confidence). This is the opposite result from the earlier fixes:
+the flag is correctly catching real misreads, so nothing was changed.
+
+**Investigated (2026-09-28), picking up the other half of priority 2:
+`total_price_without_quantity` (77) — a real, confirmed bug found, but
+not yet safely fixable.** 62 of 77 cases (81%) are rows where NOTHING
+was ordered at all (Qty and Return both 0) yet a small dollar value got
+read anyway. Traced one all the way through: the cell itself has no
+handwriting in it whatsoever, but the software still read "$8.00" from
+it, at 99.9% model confidence. The actual cause, confirmed visually by
+dumping the image at every processing stage: a printed vertical column
+divider line, slightly crooked (these scans sit about 1.4 degrees off
+square, same tilt documented elsewhere in this file), survived the
+line-removal step and happened to run mostly inside this cell's own
+row band. `is_digit()` accepts anything tall enough to plausibly be a
+full-height digit, with no UPPER limit — so a printed line spanning
+more than two rows' worth of height (measured: 2.128x the cell's own
+height in this example) still qualifies, and the model confidently
+(if nonsensically) read its thin, mostly-empty shape as a digit once
+squeezed down to the small square image it classifies from.
+
+**Why this isn't fixed yet: neither an obvious height limit nor an ink-
+density limit safely tells this apart from a real, unusually large
+digit.** Measured across all 96 scans: 58 of 2,176 digit-classified
+blobs in Total Price cells are "tall" (over 1.3x the cell's own
+height), but plenty of those are genuinely large, correctly-read digits
+sitting inside a wide, sloppily-written cell -- not residue. Checked
+whether how much of its own bounding box a blob actually fills (a
+straight line drawn inside a bounding box sized to its diagonal reach
+should fill much less of that box than a solid digit stroke) separates
+the two: it helps (tall blobs' median fill is 0.153 vs 0.231 for normal
+ones) but the populations still overlap too much to draw a safe line
+(normal digits' own 10th percentile, 0.138, already sits inside the
+tall group's typical range). A blanket cutoff on either measurement
+risks turning a real, correct digit read into a false `unreadable_ink`
+-- exactly the kind of regression this session has been careful to
+avoid everywhere else. **Worth trying next, not yet attempted:**
+checking the blob's actual straightness (fitting a line through it and
+measuring how far the real pixels stray from that fit) rather than its
+size — the same "long and straight, which handwriting never is"
+reasoning `ruled_line_positions()` already uses to find printed lines
+in the first place, just applied after the fact to a blob that slipped
+through. Measurements from this session (all 2,176 blobs' height,
+width, and box-fill-density, tagged by scan and row) haven't been kept
+in the repo, per this project's usual practice for scratch analysis
+data — a future session picking this up would need to re-run the same
+check, not dig through this repository for it.
 
 ## The Odoo server this will actually run on (checked 2026-09-23)
 
