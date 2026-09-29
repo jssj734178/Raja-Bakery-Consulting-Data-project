@@ -1113,6 +1113,52 @@ happens.
 Whether the numbers are unique across all invoice books in use is still
 unconfirmed — needed before the duplicate-check logic can be trusted.
 
+**Checked (2026-09-28): Jagbir's "may not always be visible" concern,
+confirmed and measured against all 96 real scans — and a decision made
+as a result.** Before building a calibrated box and testing the model
+on printed digits (both real work, and both previously left as "not
+designed in detail yet" above), the actual scans were checked by eye
+first, the same discipline every other real decision in this project
+has followed. The top-right corner was cropped out of every one of the
+96 real pages and looked at directly:
+
+| Invoice batch | Clean & readable | Cut off, partly visible | Missing entirely |
+|---|---|---|---|
+| NEW RAJA BAKERY LTD. (1) | 24/24 | 0 | 0 |
+| NEW RAJA BAKERY LTD. | 24/24 | 0 | 0 |
+| PH 416-727-0623... | 4/24 | 9/24 | 11/24 |
+| subzi Mandi chard. | 0/24 | 1/24 | 23/24 |
+| **Total** | **52/96 (54%)** | **10/96 (10%)** | **34/96 (35%)** |
+
+Two of the four invoice batches are entirely fine. The other two are
+badly affected — in the "subzi Mandi chard." batch, 23 of 24 pages have
+no trace of the printed number at all: the scan itself starts partway
+down the page, so the letterhead and the "Invoice:" line are simply not
+part of the digital file, not just faint or blurry.
+
+**Ruled out first: this is not a bug in `pdf_to_images.py`.** If the
+rendering step were cropping pages wrong, every page from the same
+source PDF would come out the same size. Checked directly: pages from
+the very same PDF come out different pixel sizes (e.g. one
+"PH 416-727-0623..." page rendered at 8257×10043, another from the same
+file at 7154×8589). That only makes sense if the ORIGINAL scanned pages
+already differ in size before this project ever touches them — a real,
+physical scanning inconsistency (the paper positioned differently in
+the scanner from page to page), not something fixable by changing how
+this project renders PDF pages into images.
+
+**Decision: build the auto-increment assist (below) instead of an
+automated printed-digit reader, for now.** Even a perfectly accurate
+printed-digit reader could only ever help on the 54% of pages that have
+the number at all — the other 46% have nothing to read regardless of
+how good the reader is. That changes the earlier plan's priority
+entirely: the real bottleneck is the scanning process itself (worth
+raising with whoever does the scanning, if the top margin can be made
+more generous), not the absence of automated reading. Manual entry
+already exists in `review_screen.py` and stays the primary path; see
+"Built (2026-09-28): invoice-number auto-increment assist" below for
+the cheap improvement that was built on top of it instead.
+
 ### Answers from Jagbir (2026-09-25)
 
 Every question below has now been answered, so the build can proceed.
