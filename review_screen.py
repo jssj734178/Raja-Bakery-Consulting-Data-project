@@ -57,8 +57,20 @@ one, and reading the invoice number specifically means reading PRINTED
 CLAUDE.md, "the paper invoice number becomes a label" for why both are
 needed on the eventual Odoo invoice regardless. The date is required
 before approving; the invoice number is allowed to stay blank, since
-CLAUDE.md notes it may sometimes be cut off, obscured, or missing on a
-given scan.
+checking all 96 real scans found the printed number is only actually
+visible on 54% of them (see CLAUDE.md, "Checked (2026-09-28)") -- which
+is also why automated reading isn't being built at all for now, in
+favor of the cheaper assist described next.
+
+Since real invoice numbers climb by exactly 1 per page within one
+day's scanned batch almost all the time, an unfilled invoice-number
+field is pre-filled with a GUESS -- the nearest earlier page in the
+same batch's own saved number, plus however many pages separate them
+(see _suggest_invoice_number) -- rather than starting blank. Still
+just a starting point, never trusted on its own: real batches do
+sometimes skip a number (a voided invoice in the paper book), so this
+is always shown as an ordinary editable value a reviewer can correct,
+exactly like every other guess on this screen.
 
 Approving writes a review.json (customer, invoice date, invoice number,
 corrected values, which fields were originally flagged) next to that
@@ -103,6 +115,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -390,7 +403,14 @@ class ReviewScreen:
         # previous review's corrections.
         self.customer_var.set(existing_review["customer"] if existing_review else "")
         self.invoice_date_var.set(existing_review.get("invoice_date", "") if existing_review else "")
-        self.invoice_number_var.set(existing_review.get("paper_invoice_number", "") if existing_review else "")
+        existing_number = existing_review.get("paper_invoice_number", "") if existing_review else ""
+        # A blank field (never reviewed, or previously left blank) gets
+        # a pre-filled GUESS rather than staying empty -- see
+        # _suggest_invoice_number and CLAUDE.md, "invoice-number
+        # auto-increment assist". Still just a starting point: fully
+        # editable, and never touches a number a reviewer already typed
+        # and saved.
+        self.invoice_number_var.set(existing_number or self._suggest_invoice_number(name))
         # Carried forward on every re-save (see _build_review_dict) so
         # that re-approving an invoice after it's been sent to Odoo
         # can't accidentally clear the record of that -- see
@@ -713,6 +733,56 @@ class ReviewScreen:
             "Upload complete",
             f"Processed {len(new_invoice_names)} {page_word}. Showing the first one now.",
         )
+
+    def _suggest_invoice_number(self, invoice_name: str) -> str:
+        """
+        Guess this invoice's printed number from the nearest earlier
+        page in the same uploaded batch that already has one saved --
+        see CLAUDE.md, "invoice-number auto-increment assist", for why:
+        checking 96 real scans found the printed number is only visible
+        on 54% of pages at all, so automated reading isn't worth
+        building, but real invoice numbers do climb by exactly 1 per
+        page within one day's scanned batch almost all the time. This
+        is only ever a starting guess for the reviewer to confirm or
+        correct -- never treated as trustworthy on its own -- because
+        that same check found real exceptions: two gaps (a skipped
+        number) in a single 24-page batch.
+
+        Walks backward through this batch's own earlier pages (not just
+        the immediately previous one) until it finds one with a saved,
+        purely-numeric invoice number, and adds back however many pages
+        separate them -- so one blank/unreadable page in between doesn't
+        break the guess for every page after it, only a page whose
+        number was never captured at all.
+
+        Args:
+            invoice_name: this invoice's own extractions/ folder name,
+                e.g. "some_scan_page005" (see pdf_to_images.py for
+                where that "_pageNNN" suffix comes from).
+
+        Returns:
+            A guessed number as a string, or "" if this is the first
+            page of its batch, the name doesn't match the expected
+            "..._pageNNN" shape (e.g. it wasn't produced by
+            pdf_to_images.py), or no earlier page in the batch has a
+            usable saved number to count forward from.
+        """
+        match = re.match(r"^(.*)_page(\d{3})$", invoice_name)
+        if not match:
+            return ""
+        batch_name, page_str = match.groups()
+        page_num = int(page_str)
+
+        for earlier_page in range(page_num - 1, 0, -1):
+            earlier_name = f"{batch_name}_page{earlier_page:03d}"
+            earlier_review_path = os.path.join(EXTRACTIONS_DIR, earlier_name, "review.json")
+            if not os.path.exists(earlier_review_path):
+                continue
+            with open(earlier_review_path) as f:
+                earlier_number = json.load(f).get("paper_invoice_number", "")
+            if earlier_number.isdigit():
+                return str(int(earlier_number) + (page_num - earlier_page))
+        return ""
 
     def _resolve_customer_name(self, typed: str) -> str:
         """

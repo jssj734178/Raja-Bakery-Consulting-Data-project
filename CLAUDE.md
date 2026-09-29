@@ -21,11 +21,11 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1017 | 512 | 409 | 96 |
+| `review_screen.py` | 1087 | 530 | 459 | 98 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **5944** | **2426** | **2869** | **649** |
+| **Total** | **6014** | **2444** | **2919** | **651** |
 
 *Last updated: 2026-09-28.*
 
@@ -1158,6 +1158,31 @@ more generous), not the absence of automated reading. Manual entry
 already exists in `review_screen.py` and stays the primary path; see
 "Built (2026-09-28): invoice-number auto-increment assist" below for
 the cheap improvement that was built on top of it instead.
+
+**Built (2026-09-28): invoice-number auto-increment assist.** Real
+invoice numbers climb by exactly 1 per page within one day's scanned
+batch almost all the time (confirmed against the real numbers visible
+in the check above), so a blank invoice-number field on the review
+screen is now pre-filled with a guess instead of starting empty:
+`_suggest_invoice_number()` walks backward through the SAME batch's
+earlier pages (recovering "batch" and "page number" from the
+`..._pageNNN` filename `pdf_to_images.py` already gives every page) and
+uses the nearest earlier page that has a saved, purely-numeric invoice
+number, adding back however many pages separate them. Still just an
+editable starting point, never trusted outright -- the same check
+above found two real gaps (a skipped number) in a single 24-page batch,
+so a reviewer always sees an ordinary, correctable text field, exactly
+like every other guess on this screen, never something presented as
+already confirmed.
+
+Walking backward past more than just the immediately-previous page
+matters for real cases already seen: if that one page was itself left
+blank (genuinely unreadable) or hasn't been approved yet at all, the
+guess still reaches back to the nearest one that DOES have a usable
+number, rather than breaking for every page after a single gap.
+Verified directly (not just read through): a synthetic batch with a
+blank page and a missing review.json in a row still produced the
+correct running guess for every following page.
 
 ### Answers from Jagbir (2026-09-25)
 
