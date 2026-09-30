@@ -12,7 +12,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_reader.py` | 1219 | 353 | 766 | 100 |
+| `digit_reader.py` | 1242 | 360 | 780 | 102 |
 | `extract_invoice.py` | 657 | 290 | 307 | 60 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
@@ -25,9 +25,9 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6014** | **2444** | **2919** | **651** |
+| **Total** | **6037** | **2451** | **2933** | **653** |
 
-*Last updated: 2026-09-28.*
+*Last updated: 2026-09-30.*
 
 ## What this is
 
@@ -1063,6 +1063,47 @@ naturally starts near the left edge. There is no gap between them. Both
 shape and position have now been ruled out, so the remaining
 `total_price_without_quantity` cases are best left to the review screen,
 where they are already flagged and editable.
+
+**Fixed (2026-09-30): the decimal point was often picked wrongly because
+the software chose whichever small mark sat nearest a digit.** After the
+two ideas above were ruled out, every remaining Total Price flag was
+checked against each product's usual price elsewhere in the 96 scans
+(a stand-in for "this read is probably right"). Every flag except
+`ambiguous_decimal_point` had almost no reads matching the usual price
+(0-14%), so those flags are doing their job. For
+`ambiguous_decimal_point`, looking at real crops showed why it was
+wrong so often: clear, well-written prices like "36.00", "27.00" and
+"80.00" were coming out as 0.36, 2100 and 800.0. The real decimal
+point is a bigger mark with space around it, sitting between the
+dollars and the cents, but a speck of paper grain, or a piece of one of
+the small handwritten cents zeros, often sat closer to a digit, and
+"closest to a digit" was the rule. What separates them is the layout
+of the number: among reads that matched the usual price, 82% had
+exactly two digits after the point and 14% had one. `segment_price_blobs()`
+now ranks candidate points by that first (a point ahead of every digit
+ranks last, since no total on this form is under $1) and by distance
+second, and only raises `ambiguous_decimal_point` when the layout
+cannot break the tie.
+
+Measured across all 96 scans: Qty/Return unchanged (0 differences);
+91 Total Price values changed; 27 of them now match the product's usual
+price and 0 that used to match stopped matching; fields matching the
+usual price rose from 159 to 186; `ambiguous_decimal_point` fell from
+86 to 1; every other flag count identical. Bulk bread rows now read
+$2.50-2.70 a unit, in line with the documented bulk discount. **The
+cost:** 75 of the changed values now have no flag, and a rough check
+found about 15 more wrong reads that used to be flagged (only because
+of the tie) and now are not. Most of those are digit errors the model
+makes anyway (a slanted "7" read as "1", an open-top "9" as "4").
+This makes the catalog-price sanity flag (see "Not built yet" above)
+more valuable, since it would catch exactly these. It still needs
+each product's printed price recorded from Jagbir.
+
+**Still open after this session:** a leading digit that is cut off at
+the box's left edge (seen on one real crop, a "7" partly missing);
+`no_decimal_point` (60), `possible_split_digit` (46) and
+`total_price_without_quantity` (77) still have no safe fix; the
+catalog-price flag above; and the Odoo module.
 
 ## The Odoo server this will actually run on (checked 2026-09-23)
 

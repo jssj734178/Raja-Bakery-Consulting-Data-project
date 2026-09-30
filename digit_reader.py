@@ -874,15 +874,37 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
         # CONTENDER_GAP_MARGIN_FRACTION for how a genuine tie between
         # what's left is still told apart from a single confident answer.
         span_margin = DECIMAL_POINT_SPAN_MARGIN_FRACTION * cell_width
-        contenders = sorted(
-            (b for b in decimal_candidates
-             if min_digit_x - span_margin <= (b["x1"] + b["x2"]) / 2 <= max_digit_x + span_margin),
-            key=gap_to_digits,
-        )
+
         def before_count(point_blob):
             point_x = (point_blob["x1"] + point_blob["x2"]) / 2
             return sum(1 for d in digit_blobs if (d["x1"] + d["x2"]) / 2 < point_x)
 
+        def cents_penalty(point_blob):
+            """
+            How unusual the number of digits after this point would be
+            (0 = the usual two cents digits, 1 = one, 2 = anything else,
+            3 = ahead of every digit, which is never right).
+            Among reads that came out matching a product's usual price
+            (a proxy for "read correctly"), 82% had exactly two digits
+            after the point and 14% had one, so a candidate that gives
+            the usual layout beats one that doesn't -- even one sitting
+            nearer a digit, since a speck of paper grain or a piece of a
+            small handwritten "0" often sits closer to a digit than the
+            real point does, which the writer leaves room around.
+            """
+            before = before_count(point_blob)
+            if before == 0:
+                # A point ahead of every digit would make the total
+                # under $1, which no product on this form costs.
+                return 3
+            after = len(digit_blobs) - before
+            return 0 if after == 2 else 1 if after == 1 else 2
+
+        contenders = sorted(
+            (b for b in decimal_candidates
+             if min_digit_x - span_margin <= (b["x1"] + b["x2"]) / 2 <= max_digit_x + span_margin),
+            key=lambda b: (cents_penalty(b), gap_to_digits(b)),
+        )
         if contenders:
             num_decimal_candidates = 1
             if len(contenders) > 1:
@@ -908,7 +930,8 @@ def segment_price_blobs(cell_bgr: np.ndarray, cell_box: tuple):
                 # flagged, since two real-looking candidates is an
                 # actual ambiguity, not a resolved one.
                 if (
-                    gap_difference / cell_width < CONTENDER_GAP_MARGIN_FRACTION
+                    cents_penalty(contenders[0]) == cents_penalty(contenders[1])
+                    and gap_difference / cell_width < CONTENDER_GAP_MARGIN_FRACTION
                     and before_count(contenders[0]) != before_count(contenders[1])
                     and not (touches_a_digit(contenders[0]) and not touches_a_digit(contenders[1]))
                 ):
