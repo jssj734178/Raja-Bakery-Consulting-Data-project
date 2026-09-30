@@ -1035,6 +1035,35 @@ in the repo, per this project's usual practice for scratch analysis
 data — a future session picking this up would need to re-run the same
 check, not dig through this repository for it.
 
+**Tried and rejected (2026-09-29): rejecting tall, very straight pieces
+of ink as leftover printed line.** This was the "check straightness"
+idea listed just above. Straightness was measured for every piece of
+ink taller than 1.3 times its box (58 of them across the 96 scans), and
+about 10 were much straighter than the rest, with a clean gap before
+the next one, so a rule using that gap looked promising. A full 96-scan
+before/after run showed it is not safe. It fixed the one row it was
+built for (a spurious $8.00 in an empty box on
+`NEW RAJA BAKERY LTD. (1)_page002`, row 5), but it also broke 9 rows
+that were being read correctly: those tall, straight pieces of ink were
+real handwritten "1"s, so for example "145" became "45" and "1125.4"
+became "125.4", each gaining a flag but the wrong number too. A
+handwritten "1" is simply as straight as a printed line. The rule was
+reverted and no code changed. Only 1 of the 77
+`total_price_without_quantity` cases would have been fixed anyway, so
+it would not have moved that flag much even if it had been safe.
+Shape alone cannot separate the two.
+
+**Also tried and rejected (2026-09-30): using where the piece of ink
+sits in the box.** The idea was that a printed column divider would sit
+right on the box's left or right edge, while a real "1" sits inside.
+Measured across all 58 tall pieces of ink in the 96 scans, it does not
+work: the one confirmed bad case sat 5.6% of the box's width in from its
+left edge, and the real "1"s sat 3-9% in, because a number's first digit
+naturally starts near the left edge. There is no gap between them. Both
+shape and position have now been ruled out, so the remaining
+`total_price_without_quantity` cases are best left to the review screen,
+where they are already flagged and editable.
+
 ## The Odoo server this will actually run on (checked 2026-09-23)
 
 Found by checking the machine directly rather than asking Jagbir to
