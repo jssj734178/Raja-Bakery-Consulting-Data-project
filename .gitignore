@@ -75,3 +75,8 @@ Thumbs.db
 # desktop "send to Odoo" push -- credentials, so this must never be
 # committed. See CLAUDE.md's Odoo section for what's expected in it.
 odoo_settings.local.json
+
+# Scratch output from investigating Total Price flags: real-invoice extractions
+# and per-blob measurements. Real business data, regeneratable.
+extractions_full/
+straightness_measurements.json

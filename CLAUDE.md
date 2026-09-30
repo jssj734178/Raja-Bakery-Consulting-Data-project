@@ -11,6 +11,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `alignment.py` | 522 | 149 | 323 | 50 |
 | `calibrate_template.py` | 414 | 256 | 105 | 53 |
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
+| `compare_extractions.py` | 78 | 44 | 24 | 10 |
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
 | `extract_invoice.py` | 657 | 290 | 307 | 60 |
@@ -25,7 +26,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6037** | **2451** | **2933** | **653** |
+| **Total** | **6115** | **2495** | **2957** | **663** |
 
 *Last updated: 2026-09-30.*
 
@@ -1098,6 +1099,17 @@ makes anyway (a slanted "7" read as "1", an open-top "9" as "4").
 This makes the catalog-price sanity flag (see "Not built yet" above)
 more valuable, since it would catch exactly these. It still needs
 each product's printed price recorded from Jagbir.
+
+**How to check a future change the same way:** run
+`python extract_invoice.py invoices/*.png --output-dir <new folder>`
+(about 10 minutes for all 96 scans), then
+`python compare_extractions.py <old folder> <new folder>`
+([compare_extractions.py](compare_extractions.py)). It prints how many
+Qty/Return values changed (should be 0 for a Total Price change), how
+many Total Price values changed to or from matching the product's usual
+price, and each flag's count before and after. The `extractions_full/`
+folder in the project (gitignored, real invoice data) holds the results
+from before the 2026-09-30 decimal-point fix, if a baseline is needed.
 
 **Still open after this session:** a leading digit that is cut off at
 the box's left edge (seen on one real crop, a "7" partly missing);
