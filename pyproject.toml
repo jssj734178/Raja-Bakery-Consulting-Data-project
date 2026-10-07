@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bakery-ml"
+version = "0.1.0"
+description = "Reads handwritten quantities and prices off scanned bakery invoices."
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "numpy",
+    "pillow",
+    "pymupdf",
+    "opencv-python-headless",
+]
+
+# The scripts are loose top-level files, not a package folder, so they are
+# listed by name. Only the files another project needs to import are here.
+[tool.setuptools]
+py-modules = ["alignment", "digit_reader", "extract_invoice", "model", "pdf_to_images"]

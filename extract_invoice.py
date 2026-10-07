@@ -41,8 +41,11 @@ from digit_reader import (
 # see the identical note in calibrate_template.py.
 Image.MAX_IMAGE_PIXELS = None
 
-CALIBRATION_PATH = "template_calibration.json"
-PRODUCT_ROWS_PATH = "product_rows.json"
+# Resolved next to this file, not the current folder, so the pipeline can be
+# imported from another project (the Odoo module) that runs from elsewhere.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+CALIBRATION_PATH = os.path.join(_HERE, "template_calibration.json")
+PRODUCT_ROWS_PATH = os.path.join(_HERE, "product_rows.json")
 
 # A derived unit price is flagged when it lands outside this range of the
 # product's printed catalog price. Measured against the 96 sample scans:
@@ -52,7 +55,7 @@ PRODUCT_ROWS_PATH = "product_rows.json"
 # usually lands far outside, e.g. $0.36 or $21.00 for a $3.00 product.
 CATALOG_PRICE_MIN_RATIO = 0.7
 CATALOG_PRICE_MAX_RATIO = 1.1
-CHECKPOINT_PATH = "checkpoints/digit_cnn_finetuned.pt"
+CHECKPOINT_PATH = os.path.join(_HERE, "checkpoints", "digit_cnn_finetuned.pt")
 
 # Each cell is cropped twice, with different margins, because reading
 # and reviewing want opposite things from the crop.
