@@ -563,6 +563,52 @@ cents, so a line can differ from the written Total Price by a few cents
 **Next:** try it in a browser; run the setup on the real Mac; then remote
 access from outside the bakery, which was preferred but not built.
 
+## To do next (left off 2026-10-07)
+
+Everything below is open. Nothing here blocks what already works.
+
+**Before handing over to the client**
+1. **Rehearse the Mac install on any spare Mac.** `odoo/install_mac.sh`, the
+   two Desktop icons and the `--quiet` start have only passed a bash syntax
+   check. Watch for: the icon's wait time on a slow Mac, whether Docker
+   Desktop's "start when you sign in" really is ticked, notification
+   permission prompts, and the Apple-silicon (ARM) PyTorch build.
+2. **Click through the Odoo screens in a real browser** (only checked through
+   the API so far): upload, review, Create and post, Suggested number, Unpaid
+   invoices, clicking into an invoice, Actions > Pay.
+3. **Remote access from outside the bakery** (preferred, never built).
+
+**Polish ideas for the client's experience (raised 2026-10-07)**
+- Custom bakery icons for the two Desktop apps and the Odoo "Bakery Invoices"
+  tile (they currently use stock AppleScript and accounting icons).
+- Open the browser straight onto the scanned-invoices list instead of the
+  login/home screen (test the `/odoo/action-...` link in a browser first).
+- A small "starting..." message window, so a blocked notification doesn't
+  leave only a bouncing Dock icon for up to a minute or two.
+
+**For testing on this PC**
+- A one-click Windows script for the test Odoo (port 8070, login `admin` /
+  `pw12345`): start, refresh the `~/bakery_build` copy of the code, and wipe
+  the test data (it still holds 5 test scans and 2 test invoices).
+- The test Odoo only stays up while a WSL window is held open.
+
+**Reading accuracy**
+- Total Price is still not measured against hand-read answers; about 55% of
+  priced rows carry a flag.
+- Retrain the digit model once `digit_bank/` (or the Odoo module's
+  `bakery_digit_bank/`) has real approved data; "9" read as "4" and "7" read
+  as "1" are the main confident mistakes.
+- Still without a safe fix: a leading digit cut off at a box's left edge,
+  `no_decimal_point`, `possible_split_digit`, `total_price_without_quantity`,
+  and the one phone-photo page whose table edge is found in the wrong place.
+- Unit price is rounded to cents, so a line can differ from the written Total
+  Price by a few cents.
+- The Docker image installs PyTorch 2.14.1, not the 2.13.0 in
+  `requirements.txt`; results matched on two real pages. Pin it if anything
+  ever differs.
+- The scanning margin: about 46% of old scans had the printed invoice number
+  cut off, which is a scanning habit rather than a software problem.
+
 ## Pricing decision reversed: derive price from the invoice itself, not from Odoo (decided 2026-09-23)
 
 The no-price-list plan above assumed a real Odoo price list per customer
