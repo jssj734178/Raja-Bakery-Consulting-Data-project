@@ -84,3 +84,7 @@ straightness_measurements.json
 # Scratch output from checking the catalog-price flag.
 extractions_catalog/
 catalog_run.log
+
+# Mac install: generated passwords and the one-time login note -- never commit.
+odoo/.env
+odoo/Bakery login.txt

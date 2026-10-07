@@ -431,6 +431,54 @@ anyone hand-labeling anything new.
   whenever this happens, so the field goes in front of a reviewer
   instead of straight into the bank.
 
+## Built (2026-10-06): the Odoo module and Mac install, in `odoo/`
+
+Kept inside this repository (not a separate `bakery_odoo` project as first
+planned on 2026-09-05) so a Mac needs only one download or `git clone`. The
+engine files are copied into the Docker image straight from the repository
+root, so there is still only one copy of the reading code.
+
+- **`odoo/addons/bakery_invoice_import/`** — the Odoo module. Upload a
+  PDF (one invoice per page); each page becomes a "scanned invoice" that a
+  background job reads with `extract_invoice.py`; a person checks the
+  rows (flagged ones in red, with the picture of the handwriting and the
+  reason), fills in customer, date and paper invoice number, and presses
+  "Create draft invoice". The rules match `send_to_odoo.py`: draft only,
+  no stock, no tax, price = Total Price ÷ (Qty − Return), paper number as
+  the reference with a duplicate check, a warning note for over-returns,
+  a missing price or unmatched product blocks the draft. Products are
+  matched by NAME, not by the `odoo_product_id` numbers in
+  `product_rows.json`, because a new Mac's database numbers things
+  differently. On first install it loads the 24 products (with catalog
+  prices as list prices) and the 39 customers. Digit pictures from fields
+  a reviewer left unflagged and unchanged are saved to
+  `bakery_digit_bank/` inside Odoo's data folder for later retraining.
+- **`odoo/Dockerfile`, `docker-compose.yml`, `odoo.conf`** — Odoo 19 plus
+  CPU-only PyTorch, OpenCV and PyMuPDF. `odoo.conf` lifts Odoo's default
+  memory cap, which stopped PyTorch from loading at all.
+- **Mac scripts** (`Start`, `Stop`, `Backup`, `Update Bakery.command`) and
+  [odoo/README_MAC.md](odoo/README_MAC.md), written for the person setting
+  it up. Start installs everything the first time, makes random passwords
+  (saved in `odoo/.env` and `odoo/Bakery login.txt`, both gitignored), sets
+  the company currency to CAD, and takes one backup a day.
+
+**Verified on this Windows machine's Docker (not on a Mac):** a fresh
+database installs; 24 products and 39 customers load; uploading two real
+pages through the module's own upload screen read all 24 rows of each page
+with **0 differences** from the Windows pipeline; a draft invoice was
+created in CAD with no tax and the right lines. **Not yet verified:** the
+four `.command` scripts and Apple-silicon builds (nothing here can run
+them), and the screens in a real browser (checked through the API only).
+The image installs PyTorch 2.14.1, not the 2.13.0 in `requirements.txt`;
+results matched anyway.
+
+**Known quirk, same as the desktop button:** the unit price is rounded to
+cents, so a line can differ from the written Total Price by a few cents
+(49 × $2.65 = $129.85 against a written $130.00).
+
+**Next:** try it in a browser; run the setup on the real Mac; then remote
+access from outside the bakery, which was preferred but not built.
+
 ## Pricing decision reversed: derive price from the invoice itself, not from Odoo (decided 2026-09-23)
 
 The no-price-list plan above assumed a real Odoo price list per customer

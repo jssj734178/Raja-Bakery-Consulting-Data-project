@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_bakery_invoice_upload_form" model="ir.ui.view">
+        <field name="name">bakery.invoice.upload.form</field>
+        <field name="model">bakery.invoice.upload</field>
+        <field name="arch" type="xml">
+            <form string="Upload scanned invoices">
+                <p>Choose the PDF of scanned invoices (one invoice per page). Each page is read
+                   in the background; come back to the list in a minute or two.</p>
+                <group>
+                    <field name="pdf_file" filename="pdf_filename"/>
+                    <field name="pdf_filename" invisible="1"/>
+                </group>
+                <footer>
+                    <button string="Upload and read" name="action_upload" type="object" class="btn-primary"/>
+                    <button string="Cancel" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_bakery_invoice_upload" model="ir.actions.act_window">
+        <field name="name">Upload scanned invoices</field>
+        <field name="res_model">bakery.invoice.upload</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+</odoo>

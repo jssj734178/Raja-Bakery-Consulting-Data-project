@@ -1,0 +1,16 @@
+# Keep the Docker build small and fast: send nothing except what the image
+# actually copies in (the repository also holds gigabytes of real scans and
+# extraction output that must never end up inside an image).
+*
+!alignment.py
+!data.py
+!digit_reader.py
+!extract_invoice.py
+!model.py
+!pdf_to_images.py
+!template_calibration.json
+!product_rows.json
+!customers.json
+!checkpoints/digit_cnn_finetuned.pt
+!odoo/addons
+**/__pycache__

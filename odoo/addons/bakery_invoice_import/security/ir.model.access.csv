@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_scan_user,bakery.invoice.scan user,model_bakery_invoice_scan,account.group_account_invoice,1,1,1,1
+access_scan_line_user,bakery.invoice.scan.line user,model_bakery_invoice_scan_line,account.group_account_invoice,1,1,1,1
+access_upload_user,bakery.invoice.upload user,model_bakery_invoice_upload,account.group_account_invoice,1,1,1,1

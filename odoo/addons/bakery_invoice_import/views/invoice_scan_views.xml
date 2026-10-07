@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_bakery_invoice_scan_list" model="ir.ui.view">
+        <field name="name">bakery.invoice.scan.list</field>
+        <field name="model">bakery.invoice.scan</field>
+        <field name="arch" type="xml">
+            <list decoration-danger="state == 'failed'" decoration-muted="state == 'sent'">
+                <field name="name"/>
+                <field name="state" widget="badge"/>
+                <field name="partner_id"/>
+                <field name="invoice_date"/>
+                <field name="paper_number"/>
+                <field name="flagged_count" string="Rows to check"/>
+                <field name="move_id"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_bakery_invoice_scan_form" model="ir.ui.view">
+        <field name="name">bakery.invoice.scan.form</field>
+        <field name="model">bakery.invoice.scan</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_create_draft_invoice" string="Create draft invoice"
+                            type="object" class="btn-primary" invisible="state != 'review'"/>
+                    <field name="state" widget="statusbar" statusbar_visible="queued,review,sent"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'failed'">
+                        <field name="failure_reason" readonly="1"/>
+                    </div>
+                    <div class="alert alert-info" role="alert" invisible="state not in ('queued', 'reading')">
+                        This page is being read - refresh in a minute.
+                    </div>
+                    <h1><field name="name"/></h1>
+                    <group invisible="state not in ('review', 'sent')">
+                        <group>
+                            <field name="partner_id" readonly="state == 'sent'"
+                                   options="{'no_create_edit': False}" context="{'default_customer_rank': 1}"/>
+                            <field name="invoice_date" readonly="state == 'sent'"/>
+                            <field name="paper_number" readonly="state == 'sent'"/>
+                        </group>
+                        <group>
+                            <field name="move_id" invisible="not move_id"/>
+                            <field name="flagged_count" string="Rows to check"/>
+                        </group>
+                    </group>
+                    <notebook invisible="state not in ('review', 'sent')">
+                        <page string="Rows">
+                            <field name="line_ids" readonly="state == 'sent'">
+                                <list editable="bottom" create="false" delete="false"
+                                      decoration-danger="flag_text">
+                                    <field name="product_name"/>
+                                    <field name="quantity"/>
+                                    <field name="qty_image" widget="image" options="{'size': [0, 48]}" optional="show"/>
+                                    <field name="return_qty"/>
+                                    <field name="return_image" widget="image" options="{'size': [0, 48]}" optional="show"/>
+                                    <field name="total_price"/>
+                                    <field name="price_image" widget="image" options="{'size': [0, 48]}" optional="show"/>
+                                    <field name="line_quantity"/>
+                                    <field name="unit_price"/>
+                                    <field name="product_id" optional="hide"/>
+                                    <field name="flag_text"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Scanned page">
+                            <field name="page_preview" widget="image" nolabel="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_bakery_invoice_scan" model="ir.actions.act_window">
+        <field name="name">Scanned invoices</field>
+        <field name="res_model">bakery.invoice.scan</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_bakery_root" name="Bakery Invoices" sequence="10"
+              web_icon="account,static/description/icon.png"/>
+    <menuitem id="menu_bakery_scans" name="Scanned invoices" parent="menu_bakery_root"
+              action="action_bakery_invoice_scan" sequence="10"/>
+    <menuitem id="menu_bakery_upload" name="Upload scanned invoices" parent="menu_bakery_root"
+              action="action_bakery_invoice_upload" sequence="20"/>
+</odoo>

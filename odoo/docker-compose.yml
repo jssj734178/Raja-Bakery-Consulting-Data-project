@@ -1,0 +1,41 @@
+# Run with the start script (Start Bakery.command on a Mac) rather than by
+# hand: it creates .env with fresh passwords the first time, sets up the
+# database, and opens the browser.
+name: bakery
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  odoo:
+    build:
+      context: ..            # the repository root, so the engine's files can be copied in
+      dockerfile: odoo/Dockerfile
+    image: bakery-odoo:latest
+    depends_on:
+      - db
+    ports:
+      - "${ODOO_PORT:-8069}:8069"   # reachable from any device on the same Wi-Fi
+    environment:
+      HOST: db
+      USER: odoo
+      PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - ./odoo.conf:/etc/odoo/odoo.conf:ro
+    command:
+      - odoo
+      - --db-filter=^bakery$$       # one database only, so the login page has no database picker
+      - --no-database-list
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  odoo-data:
