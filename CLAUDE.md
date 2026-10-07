@@ -1120,9 +1120,9 @@ or over 1.1 times that printed price. The limits come from the 96 scans:
 real discounts sit at 0.87-0.99 times the catalog price and almost
 nothing legitimate lands above it, while wrong reads (a misplaced
 decimal point, a misread digit) usually land far outside, like $0.36 or
-$21.00 on a $3.00 product. The printed prices were read by eye and not
-yet cross-checked against Odoo (the test server was unreachable), so
-re-check them if a product's flag looks wrong.
+$21.00 on a $3.00 product. The printed prices were read by eye, then
+cross-checked against Odoo's own list prices the same day: all 21
+match exactly.
 
 Measured on all 96 scans against the 2026-09-30 baseline: Qty/Return
 unchanged (0 differences), no Total Price or unit-price values changed
