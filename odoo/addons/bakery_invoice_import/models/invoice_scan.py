@@ -87,7 +87,7 @@ class BakeryInvoiceScan(models.Model):
             ("queued", "Waiting to be read"),
             ("reading", "Being read"),
             ("review", "Ready to review"),
-            ("sent", "Draft invoice created"),
+            ("sent", "Invoice created"),
             ("failed", "Needs manual handling"),
         ],
         default="queued", required=True, tracking=True,
@@ -95,6 +95,10 @@ class BakeryInvoiceScan(models.Model):
     failure_reason = fields.Char(readonly=True)
     pdf_page = fields.Binary("Page PDF", attachment=True, readonly=True)
     page_preview = fields.Image("Page", max_width=1600, max_height=1600, attachment=True, readonly=True)
+
+    batch_ref = fields.Char(index=True, readonly=True, help="Same for every page uploaded together in one PDF.")
+    page_number = fields.Integer(readonly=True)
+    suggested_paper_number = fields.Char(compute="_compute_suggested_paper_number")
 
     partner_id = fields.Many2one("res.partner", "Customer")
     invoice_date = fields.Date("Invoice date (handwritten)")
@@ -107,6 +111,38 @@ class BakeryInvoiceScan(models.Model):
     def _compute_flagged_count(self):
         for scan in self:
             scan.flagged_count = len(scan.line_ids.filtered("flag_text"))
+
+    @api.depends("batch_ref", "page_number", "paper_number")
+    def _compute_suggested_paper_number(self):
+        """
+        Real paper invoice numbers climb by exactly 1 per page within one
+        day's batch almost all the time (two real gaps turned up in one
+        24-page batch, so this is only ever a suggestion). Walks back to the
+        nearest earlier page of the same upload that already has a purely
+        numeric number entered, and adds the number of pages in between --
+        so one blank or unreviewed page doesn't break the guess for the pages
+        after it. Same idea as the desktop review screen's guess.
+        """
+        for scan in self:
+            suggestion = False
+            if scan.batch_ref and scan.page_number and not (scan.paper_number or "").strip():
+                earlier = self.search(
+                    [("batch_ref", "=", scan.batch_ref), ("page_number", "<", scan.page_number),
+                     ("paper_number", "!=", False)],
+                    order="page_number desc",
+                )
+                for other in earlier:
+                    number = (other.paper_number or "").strip()
+                    if number.isdigit():
+                        suggestion = str(int(number) + scan.page_number - other.page_number)
+                        break
+            scan.suggested_paper_number = suggestion
+
+    def action_use_suggested_number(self):
+        for scan in self:
+            if scan.suggested_paper_number:
+                scan.paper_number = scan.suggested_paper_number
+        return True
 
     # ------------------------------------------------------------------
     # Reading (runs in the background, from the cron)
@@ -214,6 +250,18 @@ class BakeryInvoiceScan(models.Model):
     # ------------------------------------------------------------------
 
     def action_create_draft_invoice(self):
+        return self._create_invoice(post=False)
+
+    def action_create_posted_invoice(self):
+        """
+        Same checks and rules as the draft, but also posts the invoice. These
+        invoices are the company's own record of who has paid: Odoo only gives
+        an invoice a Paid / Not Paid status once it is posted, and payments
+        arrive months after delivery and get matched to an invoice by hand.
+        """
+        return self._create_invoice(post=True)
+
+    def _create_invoice(self, post):
         self.ensure_one()
         if self.move_id:
             raise UserError("A draft invoice was already created for this scan.")
@@ -274,6 +322,9 @@ class BakeryInvoiceScan(models.Model):
                 "Warning: more was returned than ordered on these rows, which shouldn't "
                 "normally happen - check against the paper copy: " + ", ".join(over.mapped("product_name"))
             ))
+
+        if post:
+            move.action_post()
 
         self._bank_verified_digits()
         shutil.rmtree(os.path.join(_scans_dir(), str(self.id)), ignore_errors=True)

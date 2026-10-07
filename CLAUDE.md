@@ -472,6 +472,43 @@ them), and the screens in a real browser (checked through the API only).
 The image installs PyTorch 2.14.1, not the 2.13.0 in `requirements.txt`;
 results matched anyway.
 
+**Purpose, and what changed because of it (2026-10-06).** Jagbir
+explained that these invoices are mostly not sent to anyone: they are the
+company's own record of which invoices are paid or not. Customers pay on a
+cycle months after delivery, and when a payment arrives someone finds the
+invoice it is for and marks it paid. So nothing is ever paid on the day, and
+no "already paid" box was built. Because Odoo only gives an invoice a
+Paid / Not Paid status once it is POSTED, the module gained:
+
+- **"Create and post invoice"** (the main button) next to **"Create draft
+  only"**. Same checks, but the invoice is posted straight away.
+- **Bakery Invoices > Unpaid invoices**: posted invoices not fully paid,
+  grouped by customer, showing paper number, date, total and amount still
+  owed. Tick the invoices a payment covers and use Actions > Pay to record
+  it across several at once (Odoo's own bulk action; "Confirm Entries" posts
+  drafts in bulk). Tested through the API: a posted invoice shows as Not Paid
+  and appears in the list, a draft does not.
+- **Suggested paper invoice number**: a blank number shows a suggestion and a
+  "Use it" button, worked out from the nearest earlier page of the same
+  uploaded PDF that has a purely numeric number, plus the pages in between
+  (same idea as the desktop screen's guess, which was left out of the first
+  version of the module by oversight, not by decision). It is a suggestion,
+  not filled in silently, since Odoo only learns a page's number once a person
+  enters it. Tested: page 1 = 21157 suggests 21158 and 21159; it skips a
+  non-numeric number and gives no guess if nothing earlier is usable.
+
+**Bug found and fixed while testing this: updates never reached a running
+system.** The official Odoo image declares `/mnt/extra-addons` a persistent
+volume, so Docker keeps the first copy of the module there forever and a new
+version baked into the image is ignored. The module now lives in
+`/opt/bakery_addons` (set in `odoo/Dockerfile` and `odoo/odoo.conf`).
+`Update Bakery.command` also used `docker compose exec` to upgrade the
+module, which skips the entrypoint that supplies the database address; it
+now uses `docker compose run --rm`, as Start does. (Separately, building from
+a Windows folder inside WSL served a stale cached copy of the module, which
+is a WSL quirk and not expected on a Mac; the test builds from a copy on
+WSL's own disk instead.)
+
 **PyTorch inside Odoo (checked 2026-10-06).** The digit model runs
 inside the Odoo container and gives the right answers: Odoo's own
 background job loaded it and read two real pages, all 24 rows of each

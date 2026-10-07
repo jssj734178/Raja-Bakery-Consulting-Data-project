@@ -38,9 +38,17 @@ You need the Mac's admin password and an internet connection.
   page after the first, which takes about 20 seconds). Open "Scanned
   invoices", open one, check the rows (red rows were flagged, with the
   picture of the handwriting and the reason), fix the customer, date,
-  paper invoice number and any wrong numbers, then press **Create draft
-  invoice**. The draft is in Accounting > Customers > Invoices, where a
-  person gives it a final look and posts it.
+  paper invoice number and any wrong numbers, then press **Create and post
+  invoice**. (If the paper number is blank, a suggested next number is shown
+  with a "Use it" button - it is only a guess, so check it against the
+  paper.) "Create draft only" is there if you want to look at it in Odoo
+  before posting.
+- **Who still owes money:** Bakery Invoices > Unpaid invoices, grouped by
+  customer. Odoo only counts an invoice as unpaid once it is posted, which
+  is why the main button posts it.
+- **When a customer pays (usually months later):** open Unpaid invoices,
+  tick the invoices that payment covers, then Actions > Pay, and enter the
+  amount and date. They move to Paid and drop off the list.
 - **Stop:** double-click `Stop Bakery.command` when you are done for the day.
 - **From a phone or another computer on the bakery Wi-Fi:** the start
   window prints an address like `http://192.168.1.20:8069`.

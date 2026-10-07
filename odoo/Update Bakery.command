@@ -7,7 +7,7 @@ cd "$(dirname "$0")" || exit 1
 git pull --ff-only || { echo "Could not download the update."; read -n 1 -s -r -p "Press any key to close."; exit 1; }
 docker compose build \
   && docker compose up -d \
-  && docker compose exec -T odoo odoo -d bakery -u bakery_invoice_import --stop-after-init --no-http --log-level=warn
+  && docker compose run --rm -T odoo odoo -d bakery -u bakery_invoice_import --stop-after-init --no-http --log-level=warn
 docker compose restart odoo
 echo
 echo "Updated. You can close this window."

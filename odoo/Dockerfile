@@ -24,6 +24,9 @@ COPY template_calibration.json product_rows.json customers.json /opt/bakery_ml/
 COPY checkpoints/digit_cnn_finetuned.pt /opt/bakery_ml/checkpoints/digit_cnn_finetuned.pt
 ENV PYTHONPATH=/opt/bakery_ml
 
-COPY odoo/addons /mnt/extra-addons
+# Deliberately NOT /mnt/extra-addons: the official Odoo image makes that a
+# persistent volume, so Docker keeps the first copy of the module forever and
+# later versions baked into the image never reach a running system.
+COPY odoo/addons /opt/bakery_addons
 
 USER odoo

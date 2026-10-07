@@ -1,4 +1,5 @@
 import base64
+import uuid
 
 from odoo import fields, models
 from odoo.exceptions import UserError
@@ -23,11 +24,14 @@ class BakeryInvoiceUpload(models.TransientModel):
         # One invoice per page (a day's batch is a single multi-page PDF),
         # so every page becomes its own scan to read and check separately.
         scans = self.env["bakery.invoice.scan"]
+        batch_ref = uuid.uuid4().hex
         for number in range(len(source)):
             single = pymupdf.open()
             single.insert_pdf(source, from_page=number, to_page=number)
             scans |= scans.create({
                 "name": f"{base} - page {number + 1}",
+                "batch_ref": batch_ref,
+                "page_number": number + 1,
                 "pdf_page": base64.b64encode(single.tobytes()),
             })
             single.close()
