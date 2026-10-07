@@ -14,7 +14,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `compare_extractions.py` | 78 | 44 | 24 | 10 |
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
-| `extract_invoice.py` | 687 | 306 | 318 | 63 |
+| `extract_invoice.py` | 690 | 307 | 320 | 63 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -26,7 +26,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6146** | **2512** | **2968** | **666** |
+| **Total** | **6149** | **2513** | **2970** | **666** |
 
 *Last updated: 2026-10-06.*
 
