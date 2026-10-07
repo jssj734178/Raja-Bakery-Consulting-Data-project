@@ -14,7 +14,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `compare_extractions.py` | 78 | 44 | 24 | 10 |
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
-| `extract_invoice.py` | 657 | 290 | 307 | 60 |
+| `extract_invoice.py` | 687 | 306 | 318 | 63 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -22,13 +22,13 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1087 | 530 | 459 | 98 |
+| `review_screen.py` | 1088 | 531 | 459 | 98 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6115** | **2495** | **2957** | **663** |
+| **Total** | **6146** | **2512** | **2968** | **666** |
 
-*Last updated: 2026-09-30.*
+*Last updated: 2026-10-06.*
 
 ## What this is
 
@@ -1111,7 +1111,30 @@ price, and each flag's count before and after. The `extractions_full/`
 folder in the project (gitignored, real invoice data) holds the results
 from before the 2026-09-30 decimal-point fix, if a baseline is needed.
 
-**Still open after this session:** a leading digit that is cut off at
+**Built (2026-10-06): the catalog-price check.** Each product's printed
+"Unit Price" from the form is now saved as `catalog_price` in
+`product_rows.json` (read off the reference scan by eye; the three
+unsold products have none). `extract_invoice.py` flags a row
+`unit_price_far_from_catalog` when its derived unit price is under 0.7
+or over 1.1 times that printed price. The limits come from the 96 scans:
+real discounts sit at 0.87-0.99 times the catalog price and almost
+nothing legitimate lands above it, while wrong reads (a misplaced
+decimal point, a misread digit) usually land far outside, like $0.36 or
+$21.00 on a $3.00 product. The printed prices were read by eye and not
+yet cross-checked against Odoo (the test server was unreachable), so
+re-check them if a product's flag looks wrong.
+
+Measured on all 96 scans against the 2026-09-30 baseline: Qty/Return
+unchanged (0 differences), no Total Price or unit-price values changed
+by this check (it only adds a flag), and every other flag's count
+identical. The new flag fires on 243 of 492 priced rows; for 171 of
+those it is the only flag, so those are rows that used to reach review
+with nothing marked. The cost: about 55% of priced rows are now flagged
+(269 of 492), up from a rate that was too low to trust. A discount below
+70% of catalog price will also be flagged, which is a cheap extra look
+for a real person to confirm.
+
+**Still open after the 2026-09-30 session:** a leading digit that is cut off at
 the box's left edge (seen on one real crop, a "7" partly missing);
 `no_decimal_point` (60), `possible_split_digit` (46) and
 `total_price_without_quantity` (77) still have no safe fix; the

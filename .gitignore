@@ -80,3 +80,7 @@ odoo_settings.local.json
 # and per-blob measurements. Real business data, regeneratable.
 extractions_full/
 straightness_measurements.json
+
+# Scratch output from checking the catalog-price flag.
+extractions_catalog/
+catalog_run.log

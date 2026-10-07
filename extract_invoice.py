@@ -43,6 +43,15 @@ Image.MAX_IMAGE_PIXELS = None
 
 CALIBRATION_PATH = "template_calibration.json"
 PRODUCT_ROWS_PATH = "product_rows.json"
+
+# A derived unit price is flagged when it lands outside this range of the
+# product's printed catalog price. Measured against the 96 sample scans:
+# real discounts (e.g. $2.60 on a $3.00 bulk bread) sit around 0.87-0.99 of
+# catalog and prices above catalog are rare (only 4 of 479 between 1.0 and
+# 1.1), while a wrong read (a misplaced decimal point, a misread digit)
+# usually lands far outside, e.g. $0.36 or $21.00 for a $3.00 product.
+CATALOG_PRICE_MIN_RATIO = 0.7
+CATALOG_PRICE_MAX_RATIO = 1.1
 CHECKPOINT_PATH = "checkpoints/digit_cnn_finetuned.pt"
 
 # Each cell is cropped twice, with different margins, because reading
@@ -152,6 +161,21 @@ def load_calibration(calibration_path: str = CALIBRATION_PATH, product_rows_path
         product_rows = json.load(f)
     product_names = {row["row_index"]: row["product_name"] for row in product_rows["rows"]}
     return calibration, product_names
+
+
+def load_catalog_prices(product_rows_path: str = PRODUCT_ROWS_PATH) -> dict:
+    """
+    Map row_index to that product's printed catalog price (the "Unit
+    Price" column on the form), from product_rows.json. Rows with no
+    printed price (the three not-yet-sold products) are left out.
+    """
+    with open(product_rows_path) as f:
+        product_rows = json.load(f)
+    return {
+        row["row_index"]: row["catalog_price"]
+        for row in product_rows["rows"]
+        if row.get("catalog_price")
+    }
 
 
 def crop_cell(
@@ -404,6 +428,7 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
         _save_results for its shape.
     """
     calibration, product_names = load_calibration()
+    catalog_prices = load_catalog_prices()
     reference_ratio = calibration["reference_aspect_ratio"]
 
     image = cv2.cvtColor(np.array(Image.open(image_path).convert("RGB")), cv2.COLOR_RGB2BGR)
@@ -543,6 +568,11 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
             # (a division by zero/negative, or a $0.00 unit price).
             if total_price_value is not None and line_quantity > 0:
                 unit_price = round(total_price_value / line_quantity, 2)
+                catalog_price = catalog_prices.get(row_index)
+                if catalog_price and not (
+                    CATALOG_PRICE_MIN_RATIO <= unit_price / catalog_price <= CATALOG_PRICE_MAX_RATIO
+                ):
+                    total_price_flags.append("unit_price_far_from_catalog")
             elif total_price_value is not None:
                 total_price_flags.append("total_price_without_quantity")
             elif qty_result["value"] > 0:

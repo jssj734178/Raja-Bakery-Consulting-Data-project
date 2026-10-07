@@ -169,6 +169,7 @@ FLAG_EXPLANATIONS = {
     "no_decimal_point": "no decimal point was found in this box -- a Total Price should always have one (e.g. \"27.00\")",
     "ambiguous_decimal_point": "more than one mark in this box looked like it could be the decimal point, so the software isn't sure which one is real",
     "total_price_without_quantity": "a Total Price was read here, but this row's Qty minus Return isn't a positive number, so a unit price couldn't be worked out",
+    "unit_price_far_from_catalog": "the unit price worked out here (Total Price divided by quantity) is far from this product's printed catalog price -- usually a misread digit or a misplaced decimal point, though a real discount can also cause it",
     "quantity_without_total_price": "this row has a quantity but no Total Price was read here -- every filled-in row should have one",
     "border_not_detected": "the software couldn't find the printed table on this scan",
     "aspect_ratio_mismatch": "the detected table doesn't look like the usual form -- possibly a bad or crooked scan",
