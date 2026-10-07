@@ -1,24 +1,33 @@
 #!/bin/bash
-# Double-click this to start the bakery invoice system on a Mac.
-# The first time, it also sets everything up (about 10-15 minutes, mostly
-# downloading). After that it starts in under a minute.
+# Starts the bakery invoice system on a Mac. Normally you never run this by
+# hand: the "Bakery Invoices" icon on the Desktop runs it (with --quiet).
+# The first run also sets everything up (about 10-15 minutes, mostly
+# downloading); after that it starts in under a minute.
 
 cd "$(dirname "$0")" || exit 1
+QUIET=0
+[ "$1" = "--quiet" ] && QUIET=1
+
+# Programs started from an icon get a very short list of places to look for
+# commands, so name where Docker Desktop puts its tools.
+export PATH="/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 
 fail() {
   echo
   echo "PROBLEM: $*"
-  echo
-  read -n 1 -s -r -p "Press any key to close this window."
+  if [ "$QUIET" = 0 ]; then
+    echo
+    read -n 1 -s -r -p "Press any key to close this window."
+  fi
   exit 1
 }
 
 step() { echo; echo "==> $*"; }
 
-command -v docker >/dev/null 2>&1 || fail "Docker Desktop is not installed yet. Download it from https://www.docker.com/products/docker-desktop/ , install it, open it once, then double-click this file again."
+command -v docker >/dev/null 2>&1 || fail "Docker Desktop is not installed yet. Download it from https://www.docker.com/products/docker-desktop/ , install it, open it once, then try again."
 
 if ! docker info >/dev/null 2>&1; then
-  step "Starting Docker Desktop (this can take a minute)"
+  step "Starting Docker Desktop (this can take a minute or two)"
   open -a Docker
   for _ in $(seq 1 90); do
     docker info >/dev/null 2>&1 && break
@@ -37,8 +46,13 @@ if [ ! -f .env ]; then
   } > .env
 fi
 
-step "Building the program (the first time this downloads a lot - please wait)"
-docker compose build || fail "The build failed. Check the internet connection and try again."
+# Only build when the program has never been built. Day to day this skips the
+# build entirely, so starting works even with no internet; "Update Bakery"
+# is what rebuilds on purpose.
+if ! docker image inspect bakery-odoo:latest >/dev/null 2>&1; then
+  step "Building the program (the first time this downloads a lot - please wait)"
+  docker compose build || fail "The build failed. Check the internet connection and try again."
+fi
 
 step "Starting the database"
 docker compose up -d db || fail "Could not start the database."
@@ -54,8 +68,8 @@ if [ "$DB_EXISTS" != "1" ]; then
     --stop-after-init --no-http --log-level=warn \
     || fail "First-time setup failed."
 
-  # Canadian dollars, and the one login to use. The password is printed once
-  # and also saved in "Bakery login.txt" next to this file.
+  # Canadian dollars, and the one login to use. The password is saved in
+  # "Bakery login.txt" next to this file.
   docker compose run --rm -T -e NEW_PASSWORD="$FIRST_RUN_PASSWORD" odoo odoo shell -d bakery --no-http --log-level=warn <<'PY' >/dev/null
 import os
 cad = env.ref('base.CAD')
@@ -72,19 +86,23 @@ fi
 
 step "Starting the invoice system"
 docker compose up -d || fail "Could not start the invoice system."
-for _ in $(seq 1 60); do
-  curl -fs -o /dev/null http://localhost:8069/web/login && break
+READY=0
+for _ in $(seq 1 90); do
+  if curl -fs -o /dev/null http://localhost:8069/web/login; then READY=1; break; fi
   sleep 2
 done
+[ "$READY" = 1 ] || fail "The invoice system started but is not answering yet. Wait a minute and try again."
 
 # One automatic backup per day, whenever the system is started.
 ./"Backup Bakery.command" --quiet || true
 
 IP=$(ipconfig getifaddr en0 2>/dev/null)
-open http://localhost:8069
 echo
-echo "Ready. The invoice system is open in your browser."
-echo "To use it from a phone or another computer on the bakery Wi-Fi, go to: http://${IP:-<this Mac's address>}:8069"
+echo "Ready."
+echo "From a phone or another computer on the bakery Wi-Fi: http://${IP:-<the Mac address>}:8069"
 [ -f "Bakery login.txt" ] && { echo; cat "Bakery login.txt"; }
-echo
-echo "You can close this window. Double-click 'Stop Bakery' when you are finished for the day."
+if [ "$QUIET" = 0 ]; then
+  open http://localhost:8069
+  echo
+  echo "You can close this window. Use 'Stop Bakery' when you are finished for the day."
+fi

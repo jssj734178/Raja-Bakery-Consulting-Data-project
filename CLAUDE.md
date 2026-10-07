@@ -509,6 +509,34 @@ a Windows folder inside WSL served a stale cached copy of the module, which
 is a WSL quirk and not expected on a Mac; the test builds from a copy on
 WSL's own disk instead.)
 
+**Mac hand-off design: no Terminal for the daily user (2026-10-07).**
+Jagbir's requirement for the client: never touch the Terminal, as little
+friction as possible reaching Odoo and the module. So Terminal is used once,
+by whoever installs it, and never again:
+
+- **`odoo/install_mac.sh`** (run once as `bash install_mac.sh`, which also
+  avoids any "unidentified developer" prompt and any `chmod`) runs the first-time
+  setup, then builds two small AppleScript apps ON the Mac with `osacompile`
+  and puts them on the Desktop: **Bakery Invoices** (starts Docker if needed,
+  starts the system, opens the browser) and **Stop Bakery**. Built locally so
+  macOS does not treat them as downloaded programs.
+- **`Start Bakery.command --quiet`** is what the icon runs: no prompts, and it
+  only builds the image if it has never been built, so a normal start works
+  with no internet. It names Docker's folders on PATH because programs started
+  from an icon get a very short command search path (the Stop, Backup and
+  Update scripts do the same).
+- Setup day also ticks Docker Desktop's "Start Docker Desktop when you sign
+  in" (containers already restart on their own), and logs in once so the
+  browser remembers the password. The module is a menu inside Odoo, so there
+  is nothing separate to open.
+- Found by running `bash -n` on the scripts: an apostrophe inside
+  `${IP:-<this Mac's address>}` broke the start script (it had been that way
+  since it was first written).
+
+**Not tested (no Mac here):** `install_mac.sh`, the two Desktop apps and the
+`--quiet` start. The scripts pass a bash syntax check only. A rehearsal on any
+spare Mac before the real handover is the next step.
+
 **PyTorch inside Odoo (checked 2026-10-06).** The digit model runs
 inside the Odoo container and gives the right answers: Odoo's own
 background job loaded it and read two real pages, all 24 rows of each

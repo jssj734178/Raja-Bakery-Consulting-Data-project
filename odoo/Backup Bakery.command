@@ -7,6 +7,8 @@
 # with the steps in README_MAC.md ("Restoring a backup").
 
 cd "$(dirname "$0")" || exit 1
+# Icons start programs with a very short list of places to look for commands.
+export PATH="/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 QUIET=0
 [ "$1" = "--quiet" ] && QUIET=1
 
