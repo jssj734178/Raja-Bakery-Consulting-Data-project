@@ -472,6 +472,25 @@ them), and the screens in a real browser (checked through the API only).
 The image installs PyTorch 2.14.1, not the 2.13.0 in `requirements.txt`;
 results matched anyway.
 
+**PyTorch inside Odoo (checked 2026-10-06).** The digit model runs
+inside the Odoo container and gives the right answers: Odoo's own
+background job loaded it and read two real pages, all 24 rows of each
+matching the Windows pipeline exactly. It only works because `odoo.conf`
+removes Odoo's default per-process memory cap (PyTorch failed to load
+under it). Timing on this PC: about 55 seconds from upload to the first
+page finished (includes loading the model once), then about 10 seconds
+for the next page. Only the x86 Linux container was tested; an Apple-
+silicon Mac builds the ARM Linux version with a different PyTorch
+download, which should work but is the first thing to watch on setup day.
+
+**The test Odoo used for this** runs from the same `odoo/` folder in WSL
+on port 8070 (so it never touches the older test server on 8069), login
+`admin` / `pw12345`, with its own database volumes. Start it with
+`ODOO_PORT=8070 docker compose up -d` from `odoo/` inside the "Ubuntu" WSL
+distro, with a WSL session held open (see the WSL note above), and remove
+it with `docker compose down -v`. `odoo/.env` there is a test file
+(gitignored), not a real secret.
+
 **Known quirk, same as the desktop button:** the unit price is rounded to
 cents, so a line can differ from the written Total Price by a few cents
 (49 × $2.65 = $129.85 against a written $130.00).
@@ -1765,6 +1784,47 @@ yet.
 - A digit written as two strokes that are far apart can still be split up and misread. Automatically joining the pieces was tried and rejected, because the setting that correctly rejoins a split "4" also glues a genuine "50" into a single shape. A leftover stroke raises a review flag instead, which was the deliberate choice.
 - One person writing these invoices draws trailing zeros at about half the height of the digit before them. That breaks the otherwise sensible assumption that the digits in one box are all about the same height. It is the reason a piece of ink qualifies as a digit by being either big enough *or* tall enough, rather than by height alone — worth remembering before tightening either setting.
 - The model itself is about 94% accurate per digit, so it will occasionally read a digit wrong and be confident about it — for example a "9" read as a "4". Nothing flags a confident mistake. That is a limitation of the model, not of the reading process, and improving it means improving the model.
+
+## Model accuracy, re-measured (2026-10-06)
+
+**One digit** (the shipped checkpoint, 551 held-out test digits from
+invoices it never trained on): accuracy 94.19%, macro recall 94.25%,
+macro precision 92.64%, macro F1 93.32%.
+
+| Digit | Test count | Precision | Recall | F1 |
+|---|---|---|---|---|
+| 0 | 135 | 1.000 | 0.963 | 0.981 |
+| 1 | 57 | 0.931 | 0.947 | 0.939 |
+| 2 | 91 | 0.955 | 0.923 | 0.939 |
+| 3 | 52 | 0.939 | 0.885 | 0.911 |
+| 4 | 37 | 0.973 | 0.973 | 0.973 |
+| 5 | 49 | 0.900 | 0.918 | 0.909 |
+| 6 | 44 | 0.955 | 0.955 | 0.955 |
+| 7 | 31 | 0.763 | 0.935 | 0.841 |
+| 8 | 32 | 0.969 | 0.969 | 0.969 |
+| 9 | 23 | 0.880 | 0.957 | 0.917 |
+
+Digit 7 is over-predicted (low precision). The commonest confusions are
+1 read as 7, 3 as 7, and 2 as 7 or 9, but each happens only 2-3 times. The
+7 and 9 test sets are small (31 and 23), so their numbers can swing by
+several points.
+
+**Whole pipeline** (a full Qty/Return box, measured 2026-09-24 on 374
+boxes read by eye, before the later Total Price fixes): 95.5% of all
+boxes right; 79.7% of boxes with something written in them; 302 of 305
+empty boxes read as empty; 17 wrong reads, of which 13 were not flagged
+(9 of those a confident "9" read as "4" or "7" as "1").
+
+**Total Price** has not been measured against hand-read answers. Indirect
+evidence only: matching each product's usual price rose from 159 to 186
+fields after the 2026-09-30 fix, and about 55% of priced rows now carry a
+flag.
+
+**Retraining was considered and deferred:** there is no new data. The
+only labeled data is `invoice_digits/`, which the shipped model already
+trained on, and `digit_bank/` (or the Odoo module's `bakery_digit_bank/`)
+fills up only once the company approves invoices. Retraining now would
+reproduce the same 94.19%.
 
 ## Current data state
 
