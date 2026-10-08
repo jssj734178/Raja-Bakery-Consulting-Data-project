@@ -4,6 +4,7 @@
 *
 !alignment.py
 !data.py
+!digit_bank.py
 !digit_reader.py
 !extract_invoice.py
 !model.py
