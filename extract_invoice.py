@@ -24,7 +24,13 @@ import numpy as np
 import torch
 from PIL import Image
 
-from alignment import detect_border_corners, proportion_to_pixel, ruled_line_positions, validate_aspect_ratio
+from alignment import (
+    detect_border_corners,
+    pixel_to_proportion,
+    proportion_to_pixel,
+    ruled_line_positions,
+    validate_aspect_ratio,
+)
 from digit_reader import (
     classify_blobs,
     classify_price,
@@ -89,6 +95,70 @@ REVIEW_HORIZONTAL_MARGIN_FRACTION = 0.05
 # below 1 + ANALYSIS_VERTICAL_MARGIN_FRACTION (the analysis crop's
 # full height), or no divider could ever qualify.
 DIVIDER_MIN_LENGTH_CELL_FRACTION = 1.2
+
+# Where the Unit Price | Total Price divider can plausibly be, as a
+# proportion of the detected border's width (it is 0.8665 on the
+# calibration scan). Measured on real scans it lands between 0.82 and
+# 0.87; the Return | Unit Price divider (about 0.74) and the table's
+# right edge (about 0.97-1.0) are both well outside this window.
+TOTAL_PRICE_DIVIDER_WINDOW = (0.78, 0.90)
+
+
+def _merge_close_positions(positions: list, gap: float) -> list:
+    """Collapse line positions only a few pixels apart (one printed line detected twice) into one."""
+    merged = []
+    for p in sorted(positions):
+        if merged and p - merged[-1][-1] <= gap:
+            merged[-1].append(p)
+        else:
+            merged.append([p])
+    return [sum(group) / len(group) for group in merged]
+
+
+def find_total_price_left_edge(image: np.ndarray, corners: np.ndarray, rows: list):
+    """
+    Find where the Total Price column really starts on THIS scan.
+
+    The saved calibration places that edge as a fixed proportion of the
+    detected table border's width. But on some scans the border's right
+    side is found on the edge of the paper or scanner rather than the
+    table's own right line, which stretches the border and slides every
+    proportion to the right. Measured on 8 real pages, 3 had the Total
+    Price box starting 3-4% of the table too far right, cutting the
+    first digit off almost every price ("371.80" read as "71.8"). The
+    snapping step can only move a box's edges inward, so it can't
+    recover that. Instead, this looks for the column's own printed left
+    divider -- a line that runs more than half the table's height,
+    which handwriting never does -- the same way
+    calibrate_total_price.py found it on the reference scan.
+
+    Returns:
+        The divider's position as a proportion of the border's width,
+        or None if no line is found in the plausible window (the saved
+        calibration is used unchanged then).
+    """
+    top_fy = min(r["quantity_box"][1] for r in rows)
+    bottom_fy = max(r["quantity_box"][3] for r in rows)
+    x1, y1 = proportion_to_pixel(TOTAL_PRICE_DIVIDER_WINDOW[0] - 0.02, top_fy, corners)
+    x2, y2 = proportion_to_pixel(TOTAL_PRICE_DIVIDER_WINDOW[1] + 0.02, bottom_fy, corners)
+    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    strip = image[y1:y2, x1:x2]
+    if strip.size == 0:
+        return None
+
+    gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 51, 10
+    )
+    positions = ruled_line_positions(binary, axis=0, run_length=int(strip.shape[0] * 0.5))
+    positions = _merge_close_positions(positions, gap=strip.shape[1] * 0.02)
+
+    candidates = []
+    for position in positions:
+        fx, _ = pixel_to_proportion(x1 + position, y1, corners)
+        if TOTAL_PRICE_DIVIDER_WINDOW[0] <= fx <= TOTAL_PRICE_DIVIDER_WINDOW[1]:
+            candidates.append(fx)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _separate_overlapping_boxes(calibration: dict):
@@ -457,6 +527,16 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
         result = {"invoice_flagged": True, "reason": "aspect_ratio_mismatch", "rows": []}
         _save_results(result, output_dir)
         return result
+
+    # Re-anchor every row's Total Price box on this scan's own column
+    # divider (see find_total_price_left_edge). Only the left edge
+    # moves; the right edge is already trimmed back onto the table's
+    # real right line by snap_cell_box.
+    if all("total_price_box" in row for row in calibration["rows"]):
+        divider_fx = find_total_price_left_edge(image, corners, calibration["rows"])
+        if divider_fx is not None:
+            for row in calibration["rows"]:
+                row["total_price_box"][0] = divider_fx
 
     def segment_cell(row, field, box_key):
         """Crop, segment and save one cell -- everything but the model."""

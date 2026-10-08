@@ -15,7 +15,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_bank.py` | 68 | 17 | 46 | 5 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
-| `extract_invoice.py` | 690 | 307 | 320 | 63 |
+| `extract_invoice.py` | 770 | 348 | 351 | 71 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -28,7 +28,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6270** | **2563** | **3028** | **679** |
+| **Total** | **6350** | **2604** | **3059** | **687** |
 
 *Last updated: 2026-10-08.*
 
@@ -476,6 +476,8 @@ results matched anyway.
 
 **Changed (2026-10-08): the digit bank now keeps every approved field, labeled with the approved number.**
 Earlier, only fields left unflagged and unchanged were banked, using the model's own labels. But approving means a person has looked at every field, so the final number is the correct answer whether the software got it right or the reviewer fixed it, and fixed fields are the most useful (they are the digits the model gets wrong). New [digit_bank.py](digit_bank.py) decides each picture's label from the FINAL number; a field is skipped only when the pictures can't line up one-to-one with the final number's digits (the fix changed the digit count, or a stray leading "0" was read). Both the desktop screen and the Odoo module use it, and re-approving moves a picture to its new label's folder instead of leaving two copies. New [merge_digit_bank.py](merge_digit_bank.py) copies the bank into `invoice_digits/<train|val|test>/<digit>/` using the same by-invoice split as `split_dataset.py`, then `python finetune.py` retrains. Tested only on the label rules in isolation, not on a full approve in the app or the Odoo container (the Dockerfile now also copies `digit_bank.py`). This supersedes the "unflagged and unchanged" wording in earlier paragraphs.
+
+**Fixed (2026-10-08): the Total Price box started too far right on about 40% of pages.** Found while hand-reading 8 pages for a Total Price accuracy check: on 3 of 8, the table's right edge was found on the paper edge instead of the table's own right line, which stretched the border and slid the Total Price box 3-4% of the table to the right, cutting off the first digit of most prices (371.80 read as 71.8, 198.00 as 52). Every such row was flagged, but the values were wrong. `extract_invoice.find_total_price_left_edge()` now finds the Unit Price | Total Price divider on each scan (a long vertical printed line, accepted only between 0.78 and 0.90 of the border's width) and starts the box there; if exactly one such line isn't found, the saved calibration is used. Measured on all 96 scans, before/after: Qty/Return 0 differences; 98 Total Price values changed on 38 pages; 18 now match the product's usual price and 4 stopped matching (199 to 213 overall); `unit_price_far_from_catalog` 274 to 251. Cost: 32 of the changed values have no flag. Not fixed: the same right-edge problem probably also shifts Qty/Return boxes a little (untested), and some pages (for example `NEW RAJA BAKERY LTD. (1)_page010`) find no divider and keep the old behaviour. The hand-read ground truth for 8 pages was only partly finished, so Total Price accuracy is still not measured as a percentage.
 
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the
@@ -1480,7 +1482,7 @@ has followed. The top-right corner was cropped out of every one of the
 | NEW RAJA BAKERY LTD. | 24/24 | 0 | 0 |
 | PH 416-727-0623... | 4/24 | 9/24 | 11/24 |
 | subzi Mandi chard. | 0/24 | 1/24 | 23/24 |
-| **Total** | **52/96 (54%)** | **10/96 (10%)** | **34/96 (35%)** |
+| **Total** | **6350** | **2604** | **3059** | **687** |
 
 Two of the four invoice batches are entirely fine. The other two are
 badly affected — in the "subzi Mandi chard." batch, 23 of 24 pages have
