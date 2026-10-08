@@ -507,11 +507,11 @@ class ReviewScreen:
 
             typed_total_price = total_price_var.get().strip()
             try:
-                total_price = float(typed_total_price) if typed_total_price else None
+                total_price = float(typed_total_price) if typed_total_price else 0.0
             except ValueError:
                 unit_price_var.set("?")
                 return
-            if total_price is not None and qty - ret > 0:
+            if total_price > 0 and qty - ret > 0:
                 unit_price_var.set(f"{total_price / (qty - ret):.2f}")
             else:
                 unit_price_var.set("-")
@@ -1057,14 +1057,18 @@ class ReviewScreen:
                 )
                 return
 
-            # Total Price is left blank for a genuinely blank row (see
-            # digit_reader.classify_price -- unlike Qty/Return, a blank
-            # Total Price is never assumed to mean $0), so an empty
-            # field here is valid and means "no total price."
+            # An empty Total Price means 0, the same as Qty/Return: clearing
+            # a wrongly read value (say 0.1) and leaving the box empty is
+            # how a reviewer says "there is no price here". The box is
+            # filled in with 0.00 so it is visible. A row with a quantity
+            # but a 0 price is still stopped before it reaches Odoo.
             typed_total_price = w["total_price_var"].get().strip()
+            if not typed_total_price:
+                w["total_price_var"].set("0.00")
+                typed_total_price = "0.00"
             try:
-                total_price = float(typed_total_price) if typed_total_price else None
-                if total_price is not None and total_price < 0:
+                total_price = float(typed_total_price)
+                if total_price < 0:
                     raise ValueError
             except ValueError:
                 messagebox.showerror(
@@ -1075,7 +1079,7 @@ class ReviewScreen:
                 return
 
             line_quantity = qty - ret
-            unit_price = round(total_price / line_quantity, 2) if total_price is not None and line_quantity > 0 else None
+            unit_price = round(total_price / line_quantity, 2) if total_price > 0 and line_quantity > 0 else None
 
             # Bank every field's digit pictures, labeled with the number
             # the reviewer approved -- see digit_bank.py for why this is

@@ -59,6 +59,13 @@ def labels_for_field(kind: str, crops: list, original_value, final_value) -> lis
     if not digit_crops:
         return []
 
+    # An approved value of 0 (or no price) means the box is really empty,
+    # so whatever the software picked up there was stray ink, not a
+    # written digit. Banking it under "0" would teach the model that a
+    # smudge is a zero.
+    if not final_value:
+        return []
+
     # Unchanged or fixed alike, the pictures must line up with the final
     # number's digits. This also keeps a stray mark read as a leading "0"
     # (the leading_zero_digit flag) from being banked as a real zero.

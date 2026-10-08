@@ -487,9 +487,11 @@ Earlier, only fields left unflagged and unchanged were banked, using the model's
 
 **Changed (2026-10-08): the paper invoice number is now required on the desktop review screen** (Approve & Save and Send to Odoo both refuse a blank one, with a "Missing invoice number" message). When the number is cut off on the scan, read it off the paper copy. A guessed number pre-filled by `_suggest_invoice_number` counts as typed, so check it first. This supersedes earlier wording that a blank number is a normal, allowed state. The Odoo module requires it too: "Create and post invoice" / "Create draft only" refuse a blank paper number with a message (code changed, syntax-checked only; not yet run in Odoo, and the Docker image needs a rebuild to pick it up).
 
-**Changed (2026-10-08): an empty Qty or Return box on the review screen is saved as 0** (and the box is filled in with 0), instead of failing with "isn't a whole number". An empty Total Price still saves as blank (no price), not $0, so a row with a quantity but no price still blocks Send to Odoo.
+**Changed (2026-10-08): an empty Qty or Return box on the review screen is saved as 0** (and the box is filled in with 0), instead of failing with "isn't a whole number". (Total Price was changed the same way later the same day, see the next paragraph.)
 
 **Changed (2026-10-08): Approve & Save re-checks quantity against price on the values as edited.** If a row has a price but Line Qty (Qty minus Return) is 0 or less, or a Line Qty above 0 but no price, a "Quantity and price don't match" dialog lists those rows and asks "Save anyway?" (default No). The pink flags still only reflect the original reading, not later edits. Send to Odoo runs the same save step, so it asks too (and still blocks a missing price separately).
+
+**Changed (2026-10-08, later): an empty Total Price on the review screen is also saved as 0** (box filled with 0.00), so a reviewer can clear a wrongly read value like 0.1 and leave it empty. Safety kept: `send_to_odoo.py` now blocks a row with a quantity and a price of 0 (before it only blocked a missing price; the Odoo module already blocked `not total_price`). A row with a 0 price has no unit price. `digit_bank.labels_for_field` banks nothing for a field approved as 0 or empty, since whatever was picked up there was stray ink and would otherwise be labeled "0". Tested on a scratch copy only.
 
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the

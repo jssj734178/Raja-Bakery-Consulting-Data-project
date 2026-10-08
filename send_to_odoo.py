@@ -97,7 +97,7 @@ def send_invoice(invoice_name: str, client: OdooClient = None) -> dict:
     product_odoo_ids = _load_product_odoo_ids()
     ordered_rows = [r for r in review["rows"] if r["line_quantity"] > 0]
 
-    missing_price = [r["product_name"] for r in ordered_rows if r["total_price"] is None]
+    missing_price = [r["product_name"] for r in ordered_rows if not r["total_price"]]
     if missing_price:
         raise SendToOdooError(
             "Can't send -- these rows have a quantity but no Total Price. "
