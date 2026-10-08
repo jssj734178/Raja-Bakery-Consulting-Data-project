@@ -24,11 +24,11 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1082 | 533 | 451 | 98 |
+| `review_screen.py` | 1144 | 576 | 466 | 102 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6350** | **2604** | **3059** | **687** |
+| **Total** | **6412** | **2647** | **3074** | **691** |
 
 *Last updated: 2026-10-08.*
 
@@ -482,6 +482,8 @@ Earlier, only fields left unflagged and unchanged were banked, using the model's
 **Tried and rejected (2026-10-08): choosing the table's INNER right/left border line in `detect_border_corners()`.** The idea: when the paper edge or a dark scanner band sits beside the table's real right line, take the inner of the two lines (straightened by the top line's tilt) instead of one fit through both. By an independent check (is the Unit Price | Total Price divider at its calibrated 0.8665 of the border width?) it fixed 13 pages and broke none (46 to 59 of 96 aligned), but that check cannot see about 30 faint pages. End to end on all 96 scans it was not clearly better: 112 Qty/Return values changed (direction unknown), fields matching the product's usual price went 213 to 208 (10 gained, 13 lost), and `total_price_without_quantity` rose 81 to 96. Reverted. The per-scan Total Price divider fix above stays. **Judged by hand the same day:** the 47 Qty/Return fields that differed (45 rows, 28 pages) were read blind from the scan images, and 41 were clear enough to score. The current code was right on 11 and the changed border on 18 (neither on 12). Wrong reads: 30 current (11 unflagged) vs 23 changed (10 unflagged). That is a small gain for Qty/Return against a small loss for Total Price, on a sample of 41 read by one person, so it was left out. Noteworthy: on these 28 pages the CURRENT code reads printed prices as Return quantities (88000, 80000, 8800 where the box is empty), so the geometry problem is larger than the numbers show. The better fix is cleaner scans (see below).
 
 **New-style scans checked (2026-10-08).** Jagbir supplied CamScanner-style PDFs with a clean white margin and no dark paper edge. Rendered at 300 DPI like the rest, 4 invoice pages (one 1-page PDF and a 3-page PDF) all found the table border and the Unit Price | Total Price divider at 0.864-0.866 of the border width (calibrated: 0.8665), where about half of the old pages miss it. Flag rates were still high (13-23 of 24 rows flagged), mostly from handwriting and the catalog-price check, not geometry. The PDFs are 2000-2300 pixels wide natively and get upsampled to the same pixel size as before, so resolution did not need to match. Not yet scored against hand-read values.
+
+**Changed (2026-10-08): the review screen's date is picked, not typed.** Month / Day / Year dropdowns plus a Today button replace the YYYY-MM-DD text box. They still write one `YYYY-MM-DD` string, so validation, `review.json` and re-opening an approved invoice are unchanged. An impossible date (Feb 31) shows a warning and leaves the date blank.
 
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the
@@ -1486,7 +1488,7 @@ has followed. The top-right corner was cropped out of every one of the
 | NEW RAJA BAKERY LTD. | 24/24 | 0 | 0 |
 | PH 416-727-0623... | 4/24 | 9/24 | 11/24 |
 | subzi Mandi chard. | 0/24 | 1/24 | 23/24 |
-| **Total** | **6350** | **2604** | **3059** | **687** |
+| **Total** | **6412** | **2647** | **3074** | **691** |
 
 Two of the four invoice batches are entirely fine. The other two are
 badly affected — in the "subzi Mandi chard." batch, 23 of 24 pages have

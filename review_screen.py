@@ -109,6 +109,7 @@ Run with:  python review_screen.py
 """
 
 import argparse
+import calendar
 import glob
 import json
 import os
@@ -288,9 +289,12 @@ class ReviewScreen:
         # on the eventual Odoo invoice (its own date, and a searchable
         # reference for matching back to the paper copy / catching a
         # duplicate submission).
-        tk.Label(cust, text="   Date (YYYY-MM-DD):").pack(side=tk.LEFT)
+        tk.Label(cust, text="   Date:").pack(side=tk.LEFT)
+        # Still one YYYY-MM-DD string underneath (invoice_date_var), so
+        # validation, saving and loading are unchanged -- the dropdowns
+        # below just read and write it. See _build_date_picker.
         self.invoice_date_var = tk.StringVar()
-        tk.Entry(cust, textvariable=self.invoice_date_var, width=12).pack(side=tk.LEFT, padx=4)
+        self._build_date_picker(cust)
 
         tk.Label(cust, text="Invoice #:").pack(side=tk.LEFT)
         self.invoice_number_var = tk.StringVar()
@@ -402,6 +406,7 @@ class ReviewScreen:
         # previous review's corrections.
         self.customer_var.set(existing_review["customer"] if existing_review else "")
         self.invoice_date_var.set(existing_review.get("invoice_date", "") if existing_review else "")
+        self._load_date_pickers()
         existing_number = existing_review.get("paper_invoice_number", "") if existing_review else ""
         # A blank field (never reviewed, or previously left blank) gets
         # a pre-filled GUESS rather than staying empty -- see
@@ -805,6 +810,63 @@ class ReviewScreen:
                 return customer
         return typed
 
+    def _build_date_picker(self, parent):
+        """
+        Month / Day / Year dropdowns plus a Today button, instead of a
+        text box to type YYYY-MM-DD into. They are read-only (pick from
+        the list, can't type a bad date). invoice_date_var holds the
+        result as YYYY-MM-DD only once all three are chosen, and stays
+        blank otherwise, so a half-picked date is caught by the same
+        "missing date" check as an empty one.
+        """
+        this_year = datetime.now().year
+        self._month_names = [calendar.month_abbr[m] for m in range(1, 13)]
+        self.date_month_var = tk.StringVar()
+        self.date_day_var = tk.StringVar()
+        self.date_year_var = tk.StringVar()
+        for var, values, width in (
+            (self.date_month_var, self._month_names, 5),
+            (self.date_day_var, [str(d) for d in range(1, 32)], 4),
+            (self.date_year_var, [str(y) for y in range(this_year - 5, this_year + 2)], 6),
+        ):
+            box = ttk.Combobox(parent, textvariable=var, values=values, width=width, state="readonly")
+            box.pack(side=tk.LEFT, padx=1)
+            box.bind("<<ComboboxSelected>>", self._on_date_picked)
+        tk.Button(parent, text="Today", command=self._set_date_today).pack(side=tk.LEFT, padx=(3, 8))
+
+    def _on_date_picked(self, _event=None):
+        """Combine the three dropdowns into invoice_date_var (blank until all three are set, or if the day doesn't exist in that month)."""
+        month, day, year = self.date_month_var.get(), self.date_day_var.get(), self.date_year_var.get()
+        if not (month and day and year):
+            self.invoice_date_var.set("")
+            return
+        month_number = self._month_names.index(month) + 1
+        try:
+            date = datetime(int(year), month_number, int(day))
+        except ValueError:
+            # e.g. Feb 31 -- say so rather than silently shifting the date.
+            self.invoice_date_var.set("")
+            messagebox.showwarning("Invalid date", f"{month} {day}, {year} doesn't exist. Pick a valid day.")
+            return
+        self.invoice_date_var.set(date.strftime("%Y-%m-%d"))
+
+    def _load_date_pickers(self):
+        """Show invoice_date_var's current value (set when an invoice is loaded) in the three dropdowns."""
+        try:
+            date = datetime.strptime(self.invoice_date_var.get(), "%Y-%m-%d")
+            self.date_month_var.set(self._month_names[date.month - 1])
+            self.date_day_var.set(str(date.day))
+            self.date_year_var.set(str(date.year))
+        except ValueError:
+            self.date_month_var.set("")
+            self.date_day_var.set("")
+            self.date_year_var.set("")
+
+    def _set_date_today(self):
+        """Set the date to today -- the common case when invoices are entered the day they're written."""
+        self.invoice_date_var.set(datetime.now().strftime("%Y-%m-%d"))
+        self._load_date_pickers()
+
     def _on_customer_focus_out(self, _event):
         """Customer field lost focus: fold it onto the list now, so a correction is visible before Approve rather than a surprise after."""
         self.customer_var.set(self._resolve_customer_name(self.customer_var.get()))
@@ -924,7 +986,7 @@ class ReviewScreen:
         except ValueError:
             messagebox.showerror(
                 "Missing or invalid date",
-                "Enter the invoice's own handwritten date as YYYY-MM-DD before approving.",
+                "Pick the invoice's own handwritten date (month, day and year) before approving.",
             )
             return
 
