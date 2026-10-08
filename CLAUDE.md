@@ -485,6 +485,8 @@ Earlier, only fields left unflagged and unchanged were banked, using the model's
 
 **Changed (2026-10-08): the review screen's date is picked, not typed.** Month / Day / Year dropdowns plus a Today button replace the YYYY-MM-DD text box. They still write one `YYYY-MM-DD` string, so validation, `review.json` and re-opening an approved invoice are unchanged. An impossible date (Feb 31) shows a warning and leaves the date blank.
 
+**Changed (2026-10-08): the paper invoice number is now required on the desktop review screen** (Approve & Save and Send to Odoo both refuse a blank one, with a "Missing invoice number" message). When the number is cut off on the scan, read it off the paper copy. A guessed number pre-filled by `_suggest_invoice_number` counts as typed, so check it first. This supersedes earlier wording that a blank number is a normal, allowed state. The Odoo module still allows a blank number (not changed).
+
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the
 company's own record of which invoices are paid or not. Customers pay on a

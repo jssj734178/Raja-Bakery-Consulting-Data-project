@@ -55,11 +55,12 @@ than read automatically -- there's no calibrated box yet for either
 one, and reading the invoice number specifically means reading PRINTED
 (not handwritten) digits, which the model has never been tested on. See
 CLAUDE.md, "the paper invoice number becomes a label" for why both are
-needed on the eventual Odoo invoice regardless. The date is required
-before approving; the invoice number is allowed to stay blank, since
-checking all 96 real scans found the printed number is only actually
-visible on 54% of them (see CLAUDE.md, "Checked (2026-09-28)") -- which
-is also why automated reading isn't being built at all for now, in
+needed on the eventual Odoo invoice regardless. Both are required
+before approving (the invoice number became required on 2026-10-08).
+The printed number is only actually visible on 54% of the 96 real old
+scans (see CLAUDE.md, "Checked (2026-09-28)"), so on a scan where it is
+cut off it has to be read off the paper copy -- which is also why
+automated reading isn't being built at all for now, in
 favor of the cheaper assist described next.
 
 Since real invoice numbers climb by exactly 1 per page within one
@@ -298,10 +299,9 @@ class ReviewScreen:
 
         tk.Label(cust, text="Invoice #:").pack(side=tk.LEFT)
         self.invoice_number_var = tk.StringVar()
-        # No validation on this one -- CLAUDE.md flags that the printed
-        # number may sometimes be cut off, obscured, or missing on a
-        # given scan, so leaving it blank has to be a normal, allowed
-        # state, not an error to fix before approving.
+        # Required before approving (see _save_review). The printed number
+        # is sometimes cut off on a scan, so it may have to be read off
+        # the paper copy.
         tk.Entry(cust, textvariable=self.invoice_number_var, width=12).pack(side=tk.LEFT, padx=4)
 
         tk.Label(
@@ -990,11 +990,19 @@ class ReviewScreen:
             )
             return
 
-        # Freely allowed to be blank -- see CLAUDE.md, "the paper invoice
-        # number may not always be visible" -- a missing number just
-        # means the (not yet built) duplicate check can't run for this
-        # invoice, not that approval should be blocked on it.
+        # Required (changed 2026-10-08, at Jagbir's request): every
+        # approved invoice must carry its paper number, so it can be
+        # searched for and matched back to the paper copy. If the number
+        # is cut off on the scan, read it off the paper copy. A guessed
+        # number pre-filled in the box (see _suggest_invoice_number)
+        # counts as typed, so check it before approving.
         paper_invoice_number = self.invoice_number_var.get().strip()
+        if not paper_invoice_number:
+            messagebox.showerror(
+                "Missing invoice number",
+                "Type the invoice number (printed in the top right of the paper copy) before approving.",
+            )
+            return
 
         invoice_name = self.invoice_names[self.index]
         invoice_dir = os.path.join(EXTRACTIONS_DIR, invoice_name)
