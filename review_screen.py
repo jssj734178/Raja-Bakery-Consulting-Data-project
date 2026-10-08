@@ -1009,6 +1009,11 @@ class ReviewScreen:
 
         rows_out = []
         for w in self.row_widgets:
+            # An empty Qty/Return box means 0 (the software itself reads
+            # a blank cell as 0), so fill it in rather than refuse.
+            for var in (w["qty_var"], w["ret_var"]):
+                if not var.get().strip():
+                    var.set("0")
             try:
                 qty = int(w["qty_var"].get())
                 ret = int(w["ret_var"].get())
