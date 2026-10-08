@@ -275,12 +275,6 @@ class BakeryInvoiceScan(models.Model):
             # button fills in a guess, which should be checked first.
             raise UserError("Enter the paper invoice number (printed in the top right of the paper copy).")
 
-        ordered = self.line_ids.filtered(lambda l: l.line_quantity > 0)
-        if not ordered:
-            raise UserError("Nothing is ordered on any row - there is nothing to invoice.")
-        negative = self.line_ids.filtered(lambda l: l.quantity < 0 or l.return_qty < 0)
-        if negative:
-            raise UserError("Quantities can't be negative: " + ", ".join(negative.mapped("product_name")))
         # A price written on a row where nothing is ordered (or everything
         # was returned) would be silently left off the invoice, and is
         # almost always a typo or a misread. The desktop screen asks
@@ -293,6 +287,12 @@ class BakeryInvoiceScan(models.Model):
                 "fix the quantity, or clear the price to 0:\n"
                 + ", ".join(price_without_quantity.mapped("product_name"))
             )
+        ordered = self.line_ids.filtered(lambda l: l.line_quantity > 0)
+        if not ordered:
+            raise UserError("Nothing is ordered on any row - there is nothing to invoice.")
+        negative = self.line_ids.filtered(lambda l: l.quantity < 0 or l.return_qty < 0)
+        if negative:
+            raise UserError("Quantities can't be negative: " + ", ".join(negative.mapped("product_name")))
         no_price = ordered.filtered(lambda l: not l.total_price)
         if no_price:
             raise UserError(
