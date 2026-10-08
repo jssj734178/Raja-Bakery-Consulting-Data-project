@@ -1054,6 +1054,8 @@ class ReviewScreen:
                     invoice_dir, invoice_name, digit_bank.labels_for_field(kind, w[crops_key], original, final)
                 )
 
+            original_total_price = w["original_total_price"]
+
             rows_out.append({
                 "row_index": w["row_index"],
                 "product_name": w["product_name"],
