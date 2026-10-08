@@ -19,7 +19,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # The shared engine. Used straight from this folder (no install step), so its
 # data files (calibration, product list, trained model) stay next to the code.
-COPY alignment.py data.py digit_reader.py extract_invoice.py model.py pdf_to_images.py /opt/bakery_ml/
+COPY alignment.py data.py digit_bank.py digit_reader.py extract_invoice.py model.py pdf_to_images.py /opt/bakery_ml/
 COPY template_calibration.json product_rows.json customers.json /opt/bakery_ml/
 COPY checkpoints/digit_cnn_finetuned.pt /opt/bakery_ml/checkpoints/digit_cnn_finetuned.pt
 ENV PYTHONPATH=/opt/bakery_ml

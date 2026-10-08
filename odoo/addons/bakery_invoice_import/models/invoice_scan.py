@@ -336,30 +336,34 @@ class BakeryInvoiceScan(models.Model):
 
     def _bank_verified_digits(self):
         """
-        Keep the small digit pictures of every field a reviewer left both
-        unflagged and unchanged: that's a good sign the software read it
-        right, so they become free labeled examples for retraining the digit
-        model later (see CLAUDE.md, "Banking verified-correct crops").
+        Keep the small digit pictures of every field on the approved
+        invoice, labeled with the number the reviewer approved (whether the
+        software read it right or the reviewer fixed it), as free labeled
+        examples for retraining the digit model later. See digit_bank.py.
         """
+        import digit_bank
+
         work = os.path.join(_scans_dir(), str(self.id))
         for line in self.line_ids:
             crops = json.loads(line.digit_crops_json or "{}")
-            fields_ok = {
-                "quantity": not line.qty_flags and line.quantity == line.orig_quantity,
-                "return": not line.return_flags and line.return_qty == line.orig_return,
-                "total_price": not line.price_flags and abs(line.total_price - line.orig_total_price) < 0.005,
+            fields_final = {
+                "quantity": (line.orig_quantity, line.quantity),
+                "return": (line.orig_return, line.return_qty),
+                "total_price": (line.orig_total_price, line.total_price),
             }
-            for key, ok in fields_ok.items():
-                if not ok:
-                    continue
-                for crop in crops.get(key, []):
-                    digit = str(crop.get("predicted_digit", ""))
+            for key, (original, final) in fields_final.items():
+                for crop, label in digit_bank.labels_for_field(key, crops.get(key, []), original, final):
                     source = os.path.join(work, crop["path"])
-                    if not digit.isdigit() or not os.path.exists(source):
-                        continue  # a decimal point isn't a 0-9 class
-                    dest_dir = os.path.join(_digit_bank_dir(), digit)
+                    if not os.path.exists(source):
+                        continue
+                    name = f"scan{self.id}_{os.path.basename(crop['path'])}"
+                    for digit in "0123456789":
+                        stale = os.path.join(_digit_bank_dir(), digit, name)
+                        if digit != label and os.path.exists(stale):
+                            os.remove(stale)
+                    dest_dir = os.path.join(_digit_bank_dir(), label)
                     os.makedirs(dest_dir, exist_ok=True)
-                    shutil.copyfile(source, os.path.join(dest_dir, f"scan{self.id}_{os.path.basename(crop['path'])}"))
+                    shutil.copyfile(source, os.path.join(dest_dir, name))
 
 
 class BakeryInvoiceScanLine(models.Model):

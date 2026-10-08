@@ -13,22 +13,24 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `compare_extractions.py` | 78 | 44 | 24 | 10 |
 | `data.py` | 106 | 23 | 67 | 16 |
+| `digit_bank.py` | 68 | 17 | 46 | 5 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
 | `extract_invoice.py` | 690 | 307 | 320 | 63 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
 | `match_odoo_products.py` | 60 | 28 | 21 | 11 |
+| `merge_digit_bank.py` | 59 | 31 | 20 | 8 |
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1088 | 531 | 459 | 98 |
+| `review_screen.py` | 1082 | 533 | 451 | 98 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6149** | **2513** | **2970** | **666** |
+| **Total** | **6270** | **2563** | **3028** | **679** |
 
-*Last updated: 2026-10-06.*
+*Last updated: 2026-10-08.*
 
 ## What this is
 
@@ -471,6 +473,9 @@ four `.command` scripts and Apple-silicon builds (nothing here can run
 them), and the screens in a real browser (checked through the API only).
 The image installs PyTorch 2.14.1, not the 2.13.0 in `requirements.txt`;
 results matched anyway.
+
+**Changed (2026-10-08): the digit bank now keeps every approved field, labeled with the approved number.**
+Earlier, only fields left unflagged and unchanged were banked, using the model's own labels. But approving means a person has looked at every field, so the final number is the correct answer whether the software got it right or the reviewer fixed it, and fixed fields are the most useful (they are the digits the model gets wrong). New [digit_bank.py](digit_bank.py) decides each picture's label from the FINAL number; a field is skipped only when the pictures can't line up one-to-one with the final number's digits (the fix changed the digit count, or a stray leading "0" was read). Both the desktop screen and the Odoo module use it, and re-approving moves a picture to its new label's folder instead of leaving two copies. New [merge_digit_bank.py](merge_digit_bank.py) copies the bank into `invoice_digits/<train|val|test>/<digit>/` using the same by-invoice split as `split_dataset.py`, then `python finetune.py` retrains. Tested only on the label rules in isolation, not on a full approve in the app or the Odoo container (the Dockerfile now also copies `digit_bank.py`). This supersedes the "unflagged and unchanged" wording in earlier paragraphs.
 
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the

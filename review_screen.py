@@ -87,20 +87,17 @@ the network. Once sent, the invoice's Odoo draft number is recorded in
 its review.json and the button disables itself, so the same invoice
 can't be sent to Odoo a second time by accident.
 
-Approving also banks digit pictures for future retraining: for every
-Qty/Return/Total Price field the reviewer leaves BOTH unflagged and
-unchanged from what the software originally read, its individual digit
-crops (already saved by extract_invoice.py into digit_crops/, one small
-picture per digit, in the model's own predicted label) are copied into
-digit_bank/<digit>/ at the project root -- for Total Price, only the
-actual digit crops, never the decimal point itself, since it isn't a
-0-9 class. Leaving a field alone is a strong signal the model's read of
-it was actually right, so this builds a growing pile of free labeled
-training data with nobody having to hand-label anything new -- see
-CLAUDE.md, "Banking verified-correct crops as future training data". A
-field the reviewer corrected is skipped: if the software had mis-split
-the digits in the first place, the corrected number can't always be
-cleanly matched back onto which individual digit picture was wrong.
+Approving also banks digit pictures for future retraining: every
+Qty/Return/Total Price field's individual digit crops (already saved by
+extract_invoice.py into digit_crops/, one small picture per digit) are
+copied into digit_bank/<digit>/ at the project root, labeled with the
+number the reviewer APPROVED -- whether the software read it right or
+the reviewer fixed it. A person has looked at every field, so the final
+number is the correct answer; fixed fields are the most useful of all,
+since they are exactly the digits the model gets wrong. A field is
+skipped only when the fix changed how many digits there are, because
+then the pictures can't be matched to digits. The decimal point is never
+banked, since it isn't a 0-9 class. See digit_bank.py for the rules.
 
 Controls are mouse-driven (unlike label_tool.py / calibrate_template.py's
 keyboard shortcuts) since this screen is meant for day-to-day use by
@@ -126,6 +123,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
+import digit_bank
 from send_to_odoo import SendToOdooError, send_invoice
 
 EXTRACTIONS_DIR = "extractions"
@@ -974,22 +972,17 @@ class ReviewScreen:
             line_quantity = qty - ret
             unit_price = round(total_price / line_quantity, 2) if total_price is not None and line_quantity > 0 else None
 
-            # Bank a field's digits only when it's both unflagged and
-            # left exactly as the software read it -- see module
-            # docstring for why a corrected field is skipped. Total
-            # Price is compared rounded to cents, since that's the
-            # precision the field is displayed and edited at.
-            if not w["quantity_was_flagged"] and qty == w["original_quantity"]:
-                self._bank_digit_crops(invoice_dir, invoice_name, w["quantity_digit_crops"])
-            if not w["return_was_flagged"] and ret == w["original_return"]:
-                self._bank_digit_crops(invoice_dir, invoice_name, w["return_digit_crops"])
-            original_total_price = w["original_total_price"]
-            total_price_unchanged = (
-                total_price == original_total_price if original_total_price is None or total_price is None
-                else round(total_price, 2) == round(original_total_price, 2)
-            )
-            if not w["total_price_was_flagged"] and total_price_unchanged:
-                self._bank_digit_crops(invoice_dir, invoice_name, w["total_price_digit_crops"])
+            # Bank every field's digit pictures, labeled with the number
+            # the reviewer approved -- see digit_bank.py for why this is
+            # safe and when a field is skipped.
+            for kind, crops_key, original, final in (
+                ("quantity", "quantity_digit_crops", w["original_quantity"], qty),
+                ("return", "return_digit_crops", w["original_return"], ret),
+                ("total_price", "total_price_digit_crops", w["original_total_price"], total_price),
+            ):
+                self._bank_digit_crops(
+                    invoice_dir, invoice_name, digit_bank.labels_for_field(kind, w[crops_key], original, final)
+                )
 
             rows_out.append({
                 "row_index": w["row_index"],
@@ -1029,38 +1022,39 @@ class ReviewScreen:
         self._update_status(flagged_invoice=False)
         return invoice_name
 
-    def _bank_digit_crops(self, invoice_dir: str, invoice_name: str, digit_crops: list):
+    def _bank_digit_crops(self, invoice_dir: str, invoice_name: str, labeled_crops: list):
         """
-        Copy an already-verified field's individual digit crops into
-        digit_bank/<digit>/, for later retraining -- see module
-        docstring and CLAUDE.md, "Banking verified-correct crops as
-        future training data". Only called for a field the reviewer
-        left both unflagged and unchanged, since that's the signal the
-        model's own reading of it was actually right.
+        Copy an approved field's individual digit crops into
+        digit_bank/<digit>/, for later retraining -- see digit_bank.py.
 
         The destination filename is built from the invoice name plus
         the crop's own saved filename, which is already unique within
-        that invoice (row, field, and digit position) -- so approving
-        the same invoice a second time just overwrites the same files
-        rather than piling up duplicates.
+        that invoice (row, field, and digit position). Any copy left in
+        a DIFFERENT digit folder by an earlier approval is removed
+        first, so re-approving after changing a number moves the crop
+        to its new label instead of leaving it banked under both.
 
         Args:
             invoice_dir: extractions/<invoice_name>, where digit_crops/
                 lives (written by extract_invoice.py).
             invoice_name: this invoice's own name, for the destination
                 filename.
-            digit_crops: a field's "quantity_digit_crops" or
-                "return_digit_crops" list from results.json, each
-                {"path": ..., "predicted_digit": ...}. Empty for a
-                blank field -- nothing to bank.
+            labeled_crops: (crop, label) pairs from
+                digit_bank.labels_for_field; crop is {"path": ...,
+                "predicted_digit": ...}. Empty for a blank or
+                unlabelable field -- nothing to bank.
         """
-        for crop in digit_crops:
+        for crop, label in labeled_crops:
             source_path = os.path.join(invoice_dir, crop["path"])
             if not os.path.exists(source_path):
                 continue  # an older results.json predating this feature
-            dest_dir = os.path.join(DIGIT_BANK_DIR, crop["predicted_digit"])
-            os.makedirs(dest_dir, exist_ok=True)
             dest_name = f"{invoice_name}_{os.path.basename(crop['path'])}"
+            for digit in "0123456789":
+                stale = os.path.join(DIGIT_BANK_DIR, digit, dest_name)
+                if digit != label and os.path.exists(stale):
+                    os.remove(stale)
+            dest_dir = os.path.join(DIGIT_BANK_DIR, label)
+            os.makedirs(dest_dir, exist_ok=True)
             shutil.copyfile(source_path, os.path.join(dest_dir, dest_name))
 
 
