@@ -281,6 +281,18 @@ class BakeryInvoiceScan(models.Model):
         negative = self.line_ids.filtered(lambda l: l.quantity < 0 or l.return_qty < 0)
         if negative:
             raise UserError("Quantities can't be negative: " + ", ".join(negative.mapped("product_name")))
+        # A price written on a row where nothing is ordered (or everything
+        # was returned) would be silently left off the invoice, and is
+        # almost always a typo or a misread. The desktop screen asks
+        # "Save anyway?"; here it has to be fixed (set the quantity, or
+        # clear the price to 0) before the invoice is created.
+        price_without_quantity = self.line_ids.filtered(lambda l: l.total_price > 0 and l.line_quantity <= 0)
+        if price_without_quantity:
+            raise UserError(
+                "These rows have a Total Price but nothing ordered (Qty minus Return is 0 or less) - "
+                "fix the quantity, or clear the price to 0:\n"
+                + ", ".join(price_without_quantity.mapped("product_name"))
+            )
         no_price = ordered.filtered(lambda l: not l.total_price)
         if no_price:
             raise UserError(
