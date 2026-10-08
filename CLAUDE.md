@@ -489,6 +489,8 @@ Earlier, only fields left unflagged and unchanged were banked, using the model's
 
 **Changed (2026-10-08): an empty Qty or Return box on the review screen is saved as 0** (and the box is filled in with 0), instead of failing with "isn't a whole number". An empty Total Price still saves as blank (no price), not $0, so a row with a quantity but no price still blocks Send to Odoo.
 
+**Changed (2026-10-08): Approve & Save re-checks quantity against price on the values as edited.** If a row has a price but Line Qty (Qty minus Return) is 0 or less, or a Line Qty above 0 but no price, a "Quantity and price don't match" dialog lists those rows and asks "Save anyway?" (default No). The pink flags still only reflect the original reading, not later edits. Send to Odoo runs the same save step, so it asks too (and still blocks a missing price separately).
+
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the
 company's own record of which invoices are paid or not. Customers pay on a

@@ -1007,6 +1007,36 @@ class ReviewScreen:
         invoice_name = self.invoice_names[self.index]
         invoice_dir = os.path.join(EXTRACTIONS_DIR, invoice_name)
 
+        # Re-check quantity against price on the values as they stand NOW
+        # (the pink flags only reflect the original reading, not edits).
+        # A price with nothing ordered, or something ordered with no
+        # price, is almost always a typo or a misread, so ask before
+        # saving rather than letting it through silently.
+        mismatches = []
+        for w in self.row_widgets:
+            try:
+                qty = int(w["qty_var"].get().strip() or "0")
+                ret = int(w["ret_var"].get().strip() or "0")
+                typed = w["total_price_var"].get().strip()
+                total = float(typed) if typed else 0.0
+            except ValueError:
+                continue  # an unparseable value is reported by the real check below
+            line_quantity = qty - ret
+            if total > 0 and line_quantity <= 0:
+                mismatches.append(f"  - {w['product_name']}: price ${total:.2f} but quantity {line_quantity}")
+            elif line_quantity > 0 and total <= 0:
+                mismatches.append(f"  - {w['product_name']}: quantity {line_quantity} but no price")
+        if mismatches:
+            proceed = messagebox.askyesno(
+                "Quantity and price don't match",
+                "These rows have a price with no quantity, or a quantity with no price:\n\n"
+                + "\n".join(mismatches)
+                + "\n\nSave anyway?",
+                default=messagebox.NO,
+            )
+            if not proceed:
+                return
+
         rows_out = []
         for w in self.row_widgets:
             # An empty Qty/Return box means 0 (the software itself reads
