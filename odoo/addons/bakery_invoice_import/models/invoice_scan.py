@@ -269,6 +269,11 @@ class BakeryInvoiceScan(models.Model):
             raise UserError("Choose or type a customer first.")
         if not self.invoice_date:
             raise UserError("Enter the invoice date written on the paper invoice.")
+        if not (self.paper_number or "").strip():
+            # Required since 2026-10-08. If the number is cut off on the
+            # scan, read it off the paper copy; the "Use it" suggestion
+            # button fills in a guess, which should be checked first.
+            raise UserError("Enter the paper invoice number (printed in the top right of the paper copy).")
 
         ordered = self.line_ids.filtered(lambda l: l.line_quantity > 0)
         if not ordered:
@@ -290,21 +295,20 @@ class BakeryInvoiceScan(models.Model):
             )
 
         paper = (self.paper_number or "").strip()
-        if paper:
-            existing = self.env["account.move"].search(
-                [("ref", "=", paper), ("move_type", "=", "out_invoice")], limit=1
+        existing = self.env["account.move"].search(
+            [("ref", "=", paper), ("move_type", "=", "out_invoice")], limit=1
+        )
+        if existing:
+            raise UserError(
+                f"An invoice with paper number '{paper}' already exists ({existing.display_name}). "
+                "Check this isn't a duplicate before creating another."
             )
-            if existing:
-                raise UserError(
-                    f"An invoice with paper number '{paper}' already exists ({existing.display_name}). "
-                    "Check this isn't a duplicate before creating another."
-                )
 
         move = self.env["account.move"].create({
             "move_type": "out_invoice",
             "partner_id": self.partner_id.id,
             "invoice_date": self.invoice_date,
-            "ref": paper or False,
+            "ref": paper,
             "invoice_line_ids": [
                 (0, 0, {
                     "product_id": line.product_id.id,
