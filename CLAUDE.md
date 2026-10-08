@@ -13,7 +13,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `calibrate_total_price.py` | 184 | 90 | 71 | 23 |
 | `compare_extractions.py` | 78 | 44 | 24 | 10 |
 | `data.py` | 106 | 23 | 67 | 16 |
-| `digit_bank.py` | 68 | 17 | 46 | 5 |
+| `digit_bank.py` | 75 | 19 | 50 | 6 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
 | `extract_invoice.py` | 770 | 348 | 351 | 71 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
@@ -24,11 +24,11 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1144 | 576 | 466 | 102 |
+| `review_screen.py` | 1193 | 613 | 476 | 104 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6412** | **2647** | **3074** | **691** |
+| **Total** | **6468** | **2686** | **3088** | **694** |
 
 *Last updated: 2026-10-08.*
 
@@ -586,51 +586,84 @@ cents, so a line can differ from the written Total Price by a few cents
 **Next:** try it in a browser; run the setup on the real Mac; then remote
 access from outside the bakery, which was preferred but not built.
 
-## To do next (left off 2026-10-07)
+## Session record: 2026-10-08 (everything done, in order)
+
+Details are in the dated paragraphs above (search "2026-10-08"); this is the list.
+
+1. **Digit bank now keeps every approved field, labeled with the approved number** (`digit_bank.py`, `merge_digit_bank.py`; desktop and Odoo).
+2. **Total Price box re-anchored per scan** on its own column divider (`find_total_price_left_edge` in `extract_invoice.py`). Net positive on all 96 old pages, Qty/Return unchanged.
+3. **Border-detection change tried and rejected** (inner-line selection in `alignment.py`); reverted. Hand-read check: a wash.
+4. **New-style scans checked**: a clean white margin and no dark paper edge find the border and the Total Price divider correctly.
+5. **Review screen changes**: date picked from Month/Day/Year dropdowns; paper invoice number required; empty Qty/Return/Total Price saved as 0; a "Quantity and price don't match" warning at approval; a crash I introduced (`original_total_price` undefined) found and fixed.
+6. **Odoo module and image brought fully up to date and tested** (required paper number, price-without-quantity refusal, corrected-label bank, the divider fix); `.dockerignore` bug fixed (it excluded `digit_bank.py`).
+7. **Send to Odoo (desktop) now blocks a row with a quantity and a 0 price** (it only blocked a missing price before).
+8. **First accuracy measurement on a fresh batch** (9 approved pages), and the render-size and two-scale findings below.
+9. **Lost data, for the record:** my test cleanup deleted the saved review of `CamScanner 2026-10-08 02.01_page001` (and its digit crops) while the batch was being reviewed. Pages 2-10 are intact; page 1 has to be approved again. Rule since then: test saves only on a scratch copy (point `review_screen.EXTRACTIONS_DIR` / `DIGIT_BANK_DIR` at a sandbox), never delete project data as cleanup.
+
+## Retraining plan and findings to use then (deferred, decided 2026-10-08)
+
+Retraining is deliberately postponed until more approved data exists; the project was judged good enough to hand off for real use meanwhile. Jagbir has made notes on what the digit model keeps getting wrong (kept by Jagbir, not in this repository); use them when retraining.
+
+**Where the training data comes from.** Approving an invoice banks every digit crop of every Qty/Return/Total Price field, labeled with the number the reviewer APPROVED (the model's guess is not used). Desktop: `digit_bank/<digit>/` at the project root. Odoo: `bakery_digit_bank/<digit>/` inside Odoo's data folder (in the container `/var/lib/odoo/bakery_digit_bank`; copy it out before running the next step). A field is skipped when the pictures cannot be matched one-to-one to the approved number's digits (the fix changed the digit count, or a stray mark was read as a leading "0"), and a field approved as 0/empty banks nothing. Then: `python merge_digit_bank.py [bank_folder]` (splits by invoice with the same hash as `split_dataset.py`, copies, safe to re-run), then `python finetune.py`. Retrain only once there is a meaningful amount (the first batch banked about 160 crops). Retraining on the existing `invoice_digits/` alone would reproduce the same 94.19%.
+
+**Measured on the first fresh batch** (9 pages `CamScanner 2026-10-08 02.01_page002` to `page010`, 648 boxes, software's first read vs what the reviewer approved; the reviews are in `extractions/*/review.json`, gitignored, and make a ready-made scoring set: compare each row's `original_*` to its final value):
+
+| Field | All boxes | Boxes with writing | Wrong (of which unflagged) |
+|---|---|---|---|
+| Qty | 80.6% | 44.6% (25 of 56) | 42 (16) |
+| Return | 88.4% | 70.0% (14 of 20) | 25 (2) |
+| Total Price | 69.0% | 29.8% (17 of 57) | 67 (0) |
+
+Typical errors: a dropped leading digit (20 read as 2), "9" read as "4", a stray mark read as "1", "7" read as "1" or "2". This is much worse than the 95.5% measured on the old pages (2026-09-24); the new batch is harder and/or the handwriting differs. Re-measure with the same method after retraining.
+
+**Render size matters, and is scan-dependent.** All PDFs (old and new) are only about 1,900-2,500 pixels wide natively and are upsampled about 4x by the 300 DPI render in `pdf_to_images.py` (and the Odoo upload). On the 9-page batch, same pages scored against the approvals (Qty / Return / Total Price, boxes with writing):
+
+| Render | Qty | Return | Total Price |
+|---|---|---|---|
+| 300 DPI (current) | 44.6% | 70.0% | 29.8% |
+| 200 DPI | 76.8% | 80.0% | 49.1% |
+| 150 DPI | 71.4% | 90.0% | 50.9% |
+| 125 DPI | 71.4% | 85.0% | 56.1% |
+| 100 DPI | 69.6% | 85.0% | 56.1% |
+
+But on the old 96 pages, hand-reading 41 Qty/Return fields where 300 and 150 DPI disagreed: 300 right on 19, 150 right on 13 (neither 9), and the usual-price check on Total Price slipped (213 to 194). Printed line thickness is the same on old and new pages (15-18 px at 300 DPI), so scale is not the difference; the handwriting probably is. **No single DPI is best, so nothing was changed.** Decide the render size together with retraining (digit crops are normalized to 28x28, but segmentation thresholds are pixel-based and tuned at 300 DPI).
+
+**Two-scale disagreement flag (designed, measured, not built).** Read each page at full size and at half size and flag any field where the two reads differ. Measured on the 9-page batch (full vs 150 DPI): it would catch 74% of wrong Qty reads (including 10 of the 16 that carry no flag today) with 2% false alarms, 64-76% of wrong Return reads (1% false alarms), and 91% of wrong Total Price reads (1% false alarms). It only adds flags (no value changes), at roughly twice the reading time (about 3 s to 5-6 s per page on this PC; the Odoo background job would be about 10 s to 20 s per page here, Mac unknown). Idea to cut the cost: skip the second read for boxes the first read found no ink in (about 80% of boxes). Not built because Jagbir chose to wait for retraining; revisit afterwards, since a better model may shrink the gap.
+
+**Other facts to remember.**
+- Border detection on old scans is imperfect: about half of the 96 old pages do not place the Unit Price | Total Price divider where the calibration says it should (the table's right edge is sometimes found on the paper edge). The fix tried (inner border line) was a wash and was reverted; cleaner scans (white margin, no dark paper edge, flat, level, whole table visible) remove the cause. On the old scans the current code can read the printed price as a Return quantity (88000, 80000 in an empty box).
+- Scanning advice given: keep the same quality (do not shrink the files), whole table visible with a clean margin, invoice number visible.
+- `compare_extractions.py` is how to check a future change: run `python extract_invoice.py invoices/*.png --output-dir <folder>` for old and new code and compare.
+
+## To do next (updated 2026-10-08)
 
 Everything below is open. Nothing here blocks what already works.
 
 **Before handing over to the client**
-1. **Rehearse the Mac install on any spare Mac.** `odoo/install_mac.sh`, the
-   two Desktop icons and the `--quiet` start have only passed a bash syntax
-   check. Watch for: the icon's wait time on a slow Mac, whether Docker
-   Desktop's "start when you sign in" really is ticked, notification
-   permission prompts, and the Apple-silicon (ARM) PyTorch build.
-2. **Click through the Odoo screens in a real browser** (only checked through
-   the API so far): upload, review, Create and post, Suggested number, Unpaid
-   invoices, clicking into an invoice, Actions > Pay.
-3. **Remote access from outside the bakery** (preferred, never built).
+1. **Rehearse the Mac install on any spare Mac.** `odoo/install_mac.sh`, the two Desktop icons and the `--quiet` start have only passed a bash syntax check. Watch for: the icon's wait time on a slow Mac, whether Docker Desktop's "start when you sign in" really is ticked, notification permission prompts, and the Apple-silicon (ARM) PyTorch build. Also time a page on that Mac (the reading time there is unknown).
+2. **Click through the Odoo screens in a real browser** (only checked through the API so far): upload, review, Create and post, Suggested number, the new refusals (blank paper number, price with nothing ordered), Unpaid invoices, clicking into an invoice, Actions > Pay.
+3. **Re-approve page 1** of the 2026-10-08 batch if it should count (its saved review was lost, see the session record).
+4. **Remote access from outside the bakery** (preferred, never built).
 
-**Polish ideas for the client's experience (raised 2026-10-07)**
-- Custom bakery icons for the two Desktop apps and the Odoo "Bakery Invoices"
-  tile (they currently use stock AppleScript and accounting icons).
-- Open the browser straight onto the scanned-invoices list instead of the
-  login/home screen (test the `/odoo/action-...` link in a browser first).
-- A small "starting..." message window, so a blocked notification doesn't
-  leave only a bouncing Dock icon for up to a minute or two.
+**Polish ideas for the client's experience (raised 2026-10-07 and 2026-10-08)**
+- Custom bakery icons for the two Desktop apps and the Odoo "Bakery Invoices" tile.
+- Open the browser straight onto the scanned-invoices list instead of the login/home screen.
+- A small "starting..." message window, so a blocked notification doesn't leave only a bouncing Dock icon.
+- Review screen layout: Jagbir finds a lot on screen with the rows and flagged crops side by side but wants the crops kept; revisit after real use.
+- A "Create anyway" confirmation in Odoo for price-without-quantity (the desktop screen has "Save anyway?"; Odoo currently just refuses).
 
 **For testing on this PC**
-- A one-click Windows script for the test Odoo (port 8070, login `admin` /
-  `pw12345`): start, refresh the `~/bakery_build` copy of the code, and wipe
-  the test data (it still holds 5 test scans and 2 test invoices).
+- A one-click Windows script for the test Odoo (port 8070, login `admin` / `pw12345`, database `bakery`): start, refresh the `~/bakery_build` copy of the code (engine files, `.dockerignore`, `odoo/`), rebuild, upgrade the module (`docker compose run --rm -T odoo odoo -d bakery -u bakery_invoice_import --stop-after-init --no-http`), and wipe test data (it holds my test scans and draft invoices from 2026-10-06 to 2026-10-08).
 - The test Odoo only stays up while a WSL window is held open.
 
-**Reading accuracy**
-- Total Price is still not measured against hand-read answers; about 55% of
-  priced rows carry a flag.
-- Retrain the digit model once `digit_bank/` (or the Odoo module's
-  `bakery_digit_bank/`) has real approved data; "9" read as "4" and "7" read
-  as "1" are the main confident mistakes.
-- Still without a safe fix: a leading digit cut off at a box's left edge,
-  `no_decimal_point`, `possible_split_digit`, `total_price_without_quantity`,
-  and the one phone-photo page whose table edge is found in the wrong place.
-- Unit price is rounded to cents, so a line can differ from the written Total
-  Price by a few cents.
-- The Docker image installs PyTorch 2.14.1, not the 2.13.0 in
-  `requirements.txt`; results matched on two real pages. Pin it if anything
-  ever differs.
-- The scanning margin: about 46% of old scans had the printed invoice number
-  cut off, which is a scanning habit rather than a software problem.
+**Retraining and reading accuracy** (see "Retraining plan and findings to use then")
+- Retrain the digit model once the digit banks hold real approved data; use Jagbir's notes on what the model fails at. Decide the render DPI alongside it.
+- Revisit the two-scale disagreement flag after retraining.
+- Re-measure Qty/Return/Total Price on a fresh approved batch with the same method.
+- Still without a safe fix: a leading digit cut off at a box's left edge, `no_decimal_point`, `possible_split_digit`, `total_price_without_quantity`, and pages whose table edge is found in the wrong place.
+- Unit price is rounded to cents, so a line can differ from the written Total Price by a few cents.
+- The Docker image installs PyTorch 2.14.1, not the 2.13.0 in `requirements.txt`; results matched on two real pages. Pin it if anything ever differs.
+- The scanning margin: about 46% of old scans had the printed invoice number cut off, a scanning habit rather than a software problem (the invoice number is now required, so it must be read off the paper then).
 
 ## Pricing decision reversed: derive price from the invoice itself, not from Odoo (decided 2026-09-23)
 
@@ -1498,7 +1531,7 @@ has followed. The top-right corner was cropped out of every one of the
 | NEW RAJA BAKERY LTD. | 24/24 | 0 | 0 |
 | PH 416-727-0623... | 4/24 | 9/24 | 11/24 |
 | subzi Mandi chard. | 0/24 | 1/24 | 23/24 |
-| **Total** | **6412** | **2647** | **3074** | **691** |
+| **Total** | **6468** | **2686** | **3088** | **694** |
 
 Two of the four invoice batches are entirely fine. The other two are
 badly affected — in the "subzi Mandi chard." batch, 23 of 24 pages have
