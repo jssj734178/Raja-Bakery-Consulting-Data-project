@@ -179,7 +179,12 @@ class BakeryInvoiceScan(models.Model):
         doc = pymupdf.open(stream=base64.b64decode(self.pdf_page), filetype="pdf")
         zoom = 300 / 72  # same 300 DPI the whole pipeline was tuned on
         pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-        image_path = os.path.join(work, "page.png")
+        # Saved as an uncompressed .ppm, not a .png: compressing a 67-megapixel
+        # page as a PNG took ~10 s of the ~15 s per page measured inside the
+        # container, writing it raw takes 0.3 s, and the reader (Pillow opens
+        # by content, not file name) produced identical rows either way.
+        # It is deleted again below, so the ~200 MB is only here briefly.
+        image_path = os.path.join(work, "page.ppm")
         pix.save(image_path)
         doc.close()
 
@@ -230,16 +235,17 @@ class BakeryInvoiceScan(models.Model):
                 "price_flags": ",".join(price_flags),
                 "digit_crops_json": json.dumps(digit_crops),
             }
-            # A picture is only kept for a flagged field -- the same
-            # trade-off the desktop screen made: it's what a reviewer
-            # actually needs open, and keeps the list short.
-            for key, flags, image_field in (
-                ("qty", qty_flags, "qty_image"),
-                ("return", ret_flags, "return_image"),
-                ("total_price", price_flags, "price_image"),
+            # A picture is kept for EVERY editable field (changed 2026-10-09,
+            # unlike the desktop screen, which only shows flagged ones), so
+            # a reviewer can see which handwriting the number beside it was
+            # read from without having to hunt through the whole page.
+            for key, image_field in (
+                ("qty", "qty_image"),
+                ("return", "return_image"),
+                ("total_price", "price_image"),
             ):
                 path = os.path.join(work, "crops", f"row{row['row_index']:02d}_{key}.png")
-                if flags and os.path.exists(path):
+                if os.path.exists(path):
                     line[image_field] = _file_b64(path)
             lines.append(line)
         self.env["bakery.invoice.scan.line"].create(lines)

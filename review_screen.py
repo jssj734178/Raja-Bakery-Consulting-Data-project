@@ -1010,8 +1010,9 @@ class ReviewScreen:
         # Re-check quantity against price on the values as they stand NOW
         # (the pink flags only reflect the original reading, not edits).
         # A price with nothing ordered, or something ordered with no
-        # price, is almost always a typo or a misread, so ask before
-        # saving rather than letting it through silently.
+        # price, is almost always a typo or a misread, so refuse to save
+        # (changed from a "Save anyway?" question on 2026-10-09: a person
+        # clicking through it let an impossible row reach Odoo's queue).
         mismatches = []
         for w in self.row_widgets:
             try:
@@ -1027,15 +1028,14 @@ class ReviewScreen:
             elif line_quantity > 0 and total <= 0:
                 mismatches.append(f"  - {w['product_name']}: quantity {line_quantity} but no price")
         if mismatches:
-            proceed = messagebox.askyesno(
+            messagebox.showerror(
                 "Quantity and price don't match",
                 "These rows have a price with no quantity, or a quantity with no price:\n\n"
                 + "\n".join(mismatches)
-                + "\n\nSave anyway?",
-                default=messagebox.NO,
+                + "\n\nFix them before saving. A price needs something ordered (fix Qty/Return, "
+                "or clear the price to 0); a quantity needs its Total Price filled in.",
             )
-            if not proceed:
-                return
+            return
 
         rows_out = []
         for w in self.row_widgets:

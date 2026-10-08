@@ -24,13 +24,13 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1193 | 613 | 476 | 104 |
+| `review_screen.py` | 1193 | 612 | 477 | 104 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6468** | **2686** | **3088** | **694** |
+| **Total** | **6468** | **2685** | **3089** | **694** |
 
-*Last updated: 2026-10-08.*
+*Last updated: 2026-10-09.*
 
 ## What this is
 
@@ -489,11 +489,13 @@ Earlier, only fields left unflagged and unchanged were banked, using the model's
 
 **Changed (2026-10-08): an empty Qty or Return box on the review screen is saved as 0** (and the box is filled in with 0), instead of failing with "isn't a whole number". (Total Price was changed the same way later the same day, see the next paragraph.)
 
-**Changed (2026-10-08): Approve & Save re-checks quantity against price on the values as edited.** If a row has a price but Line Qty (Qty minus Return) is 0 or less, or a Line Qty above 0 but no price, a "Quantity and price don't match" dialog lists those rows and asks "Save anyway?" (default No). The pink flags still only reflect the original reading, not later edits. Send to Odoo runs the same save step, so it asks too (and still blocks a missing price separately).
+**Changed (2026-10-08): Approve & Save re-checks quantity against price on the values as edited.** If a row has a price but Line Qty (Qty minus Return) is 0 or less, or a Line Qty above 0 but no price, a "Quantity and price don't match" dialog lists those rows and asks "Save anyway?" (default No). **Superseded 2026-10-09: it is now a hard block (an error dialog listing the rows, no "Save anyway?"), so a price with nothing ordered, or a quantity with no price, cannot be saved or sent until fixed. Checked only by compiling the file, not by clicking through the screen.** The pink flags still only reflect the original reading, not later edits. Send to Odoo runs the same save step, so it asks too (and still blocks a missing price separately).
 
 **Changed (2026-10-08, later): an empty Total Price on the review screen is also saved as 0** (box filled with 0.00), so a reviewer can clear a wrongly read value like 0.1 and leave it empty. Safety kept: `send_to_odoo.py` now blocks a row with a quantity and a price of 0 (before it only blocked a missing price; the Odoo module already blocked `not total_price`). A row with a 0 price has no unit price. `digit_bank.labels_for_field` banks nothing for a field approved as 0 or empty, since whatever was picked up there was stray ink and would otherwise be labeled "0". Tested on a scratch copy only.
 
 **Odoo module brought up to date and tested (2026-10-08, night).** Everything changed on 2026-10-08 is now in the Odoo module and image, rebuilt from a fresh copy and run in the test Odoo (port 8070, WSL, login `admin` / `pw12345`, database `bakery`): the corrected-label digit bank (`digit_bank.py`), the per-scan Total Price divider fix (`extract_invoice.py`), the required paper invoice number, and a new check that refuses to create an invoice when a row has a Total Price but nothing ordered (Qty minus Return 0 or less; the Odoo screen can't ask "Save anyway?" like the desktop one, so it must be fixed first). Empty Qty/Return/Total Price already mean 0 in Odoo's own number fields, and Odoo has its own date picker, so those needed no change. Verified through Odoo's API on a real page: upload, background read (about 28 seconds, all 24 rows), **0 differences from the desktop reader** over 24 rows x 3 fields; blank paper number refused; price-without-quantity refused; quantity-without-price refused; a clean invoice created as a draft in CAD with the right total; the digit bank saved crops under the approved labels and skipped a field whose crops could not be matched (a stray leading "0" crop). **Bug found and fixed while doing this:** the repository's `.dockerignore` whitelists the engine files by name and did not list the new `digit_bank.py`, so the image build would have failed on the Mac too. Still not verified: the four `.command` scripts, `install_mac.sh` and the Desktop icons (no Mac here), Apple-silicon builds, and the screens in a real browser. The test Odoo still holds my test scans and draft invoices.
+
+**Odoo review form and reading speed changed (2026-10-09).** The Rows table in the Odoo form now shows a handwriting picture beside every editable field (Qty, Return, Total Price), not only flagged ones, and drops the computed "Qty - Return" and "Unit $" columns; the flag reason and Odoo product are hidden behind the column picker (red rows still mark flagged lines). The desktop screen is unchanged (pictures for flagged fields only). Reading speed: timing one page inside the container showed that saving the 67-megapixel page as a compressed PNG took about 10 of its roughly 15 seconds; `_read_page` now writes an uncompressed `.ppm` instead (0.3 s, rows identical to the PNG route on the page tested). Measured through Odoo itself on this PC: about 12-14 seconds per page after the first (the first also pays the model load and up to a minute of waiting for the cron), against about 28 before. The container sees all 12 cores with no limit, so core count was not the cause. Rebuilt and run on the test Odoo only; not tried on a Mac or in a browser.
 
 **Purpose, and what changed because of it (2026-10-06).** Jagbir
 explained that these invoices are mostly not sent to anyone: they are the
@@ -650,7 +652,7 @@ Everything below is open. Nothing here blocks what already works.
 - Open the browser straight onto the scanned-invoices list instead of the login/home screen.
 - A small "starting..." message window, so a blocked notification doesn't leave only a bouncing Dock icon.
 - Review screen layout: Jagbir finds a lot on screen with the rows and flagged crops side by side but wants the crops kept; revisit after real use.
-- A "Create anyway" confirmation in Odoo for price-without-quantity (the desktop screen has "Save anyway?"; Odoo currently just refuses).
+- A "Create anyway" confirmation in Odoo for price-without-quantity (the desktop screen used to have "Save anyway?" and now hard-blocks like Odoo).
 
 **For testing on this PC**
 - A one-click Windows script for the test Odoo (port 8070, login `admin` / `pw12345`, database `bakery`): start, refresh the `~/bakery_build` copy of the code (engine files, `.dockerignore`, `odoo/`), rebuild, upgrade the module (`docker compose run --rm -T odoo odoo -d bakery -u bakery_invoice_import --stop-after-init --no-http`), and wipe test data (it holds my test scans and draft invoices from 2026-10-06 to 2026-10-08).
@@ -1531,7 +1533,7 @@ has followed. The top-right corner was cropped out of every one of the
 | NEW RAJA BAKERY LTD. | 24/24 | 0 | 0 |
 | PH 416-727-0623... | 4/24 | 9/24 | 11/24 |
 | subzi Mandi chard. | 0/24 | 1/24 | 23/24 |
-| **Total** | **6468** | **2686** | **3088** | **694** |
+| **Total** | **6468** | **2685** | **3089** | **694** |
 
 Two of the four invoice batches are entirely fine. The other two are
 badly affected — in the "subzi Mandi chard." batch, 23 of 24 pages have
