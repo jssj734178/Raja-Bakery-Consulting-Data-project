@@ -678,6 +678,29 @@ Not worth doing: the two-scale disagreement flag (doubles reading time).
 
 Each page of an uploaded PDF is its own "scanned invoice" with its own status (Waiting to be read, Being read, Ready to review, Invoice created, Needs manual handling). A page can be reviewed as soon as it is "Ready to review" while later pages are still reading; pages can be done in any order and on different days; creating one invoice does not affect the others. The one order dependence: the suggested paper invoice number comes from the nearest EARLIER page of the same PDF that already has a number typed in, so reviewing in order gives the best suggestions.
 
+## Start here next session (written 2026-10-13)
+
+State: everything is committed and pushed; the working tree is clean apart from the untracked `.claude/` folder. Nothing is half-done. Jagbir decided to tackle all the open items below next time, in whatever order suits. Details for each are in the sections named.
+
+**Header pictures (finish idea A, see "Ideas that might be implemented soon")**
+1. Date and customer boxes: look at more pages from each of the 5 sets of scans first (the invoice number's position is confirmed; the date's handwriting varies in size), add them to `template_calibration.json` next to `invoice_number_box`, and extend `crop_invoice_number` / the Odoo fields the same way.
+2. Show the invoice-number picture on the desktop `review_screen.py` (only the Odoo form has it).
+3. Make the Odoo picture bigger (it is 48 px tall; `options="{'size': [0, 48]}"` in `views/invoice_scan_views.xml`).
+4. Re-check the 0.70 / 0.35 "visible / cut off / missing" cut-offs (`INVOICE_NUMBER_*_INSIDE_FRACTION` in `extract_invoice.py`) on real new scans.
+
+**Mac hand-off** (see "The client's Mac" and "To do next")
+- Rehearse `install_mac.sh` and the Desktop icons on a spare Mac; check the image is `arm64` and time a 3-page upload.
+- Pin the PyTorch version in `odoo/Dockerfile` and test the pinned build in WSL.
+- Confirm `odoo:19.0` / `postgres:15` have ARM builds; add the Docker Desktop memory step (about 6 GB) to `odoo/README_MAC.md`.
+- Check that `Backup Bakery.command` includes Odoo's file store (the page PDFs) before telling her the original PDFs can be deleted.
+- Click through the remaining Odoo screens in a browser (Create and post, Suggested number, refusals, Unpaid invoices, Actions > Pay). **How to do that from here:** this session had no browser tool, so a scratch virtualenv with Playwright driving the installed Chrome (`channel="chrome"`, headless) worked: log in at `/web/login?db=bakery`, wait on `.o_navbar` (not `networkidle`, which never settles because of Odoo's polling), open `/odoo/action-bakery_invoice_import.action_bakery_invoice_scan`.
+- Remote access from outside the bakery (never built).
+
+**Accuracy and data**
+- Re-approve page 1 of the 2026-10-08 batch; retrain once real approved digits are banked (see "Retraining plan"); re-measure on a fresh approved batch.
+
+**Test Odoo on this PC** (port 8070, `admin` / `pw12345`, database `bakery`): it is currently rebuilt with the 2026-10-13 code and holds test scans, including three named `header_test - page 1-3`. It only stays up while a WSL window is held open. Refresh recipe used on 2026-10-13: copy the engine `*.py`/`*.json`, `.dockerignore` and `odoo/` from `C:akery_ml` into `~/bakery_build` in the Ubuntu distro, `ODOO_PORT=8070 docker compose build` then `up -d` in `~/bakery_build/odoo`, then `docker compose run --rm -T odoo odoo -d bakery -u bakery_invoice_import --stop-after-init --no-http`. A 3-page test PDF can be uploaded through `bakery.invoice.upload` over XML-RPC (`action_upload`); a page takes about 20 seconds.
+
 ## Session record: 2026-10-08 (everything done, in order)
 
 Details are in the dated paragraphs above (search "2026-10-08"); this is the list.
