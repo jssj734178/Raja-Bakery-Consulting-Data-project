@@ -96,6 +96,17 @@ class BakeryInvoiceScan(models.Model):
     pdf_page = fields.Binary("Page PDF", attachment=True, readonly=True)
     page_preview = fields.Image("Page", max_width=1600, max_height=1600, attachment=True, readonly=True)
 
+    # Picture of the printed invoice number from the top of the scan, shown
+    # beside the paper-number field. Nothing is read from it; it is only
+    # there so the reviewer can see what the paper number should be, or see
+    # that the scan doesn't include it (see extract_invoice.crop_invoice_number).
+    header_number_image = fields.Image("Invoice number on scan", max_width=900, max_height=300,
+                                       attachment=True, readonly=True)
+    header_number_status = fields.Selection(
+        [("ok", "Visible"), ("cut_off", "Possibly cut off"), ("missing", "Not on this scan")],
+        readonly=True,
+    )
+
     batch_ref = fields.Char(index=True, readonly=True, help="Same for every page uploaded together in one PDF.")
     page_number = fields.Integer(readonly=True)
     suggested_paper_number = fields.Char(compute="_compute_suggested_paper_number")
@@ -205,6 +216,13 @@ class BakeryInvoiceScan(models.Model):
                                   f"({result['reason']}). Check the scan, or create the invoice by hand.",
             })
             return
+
+        number_info = (result.get("header_crops") or {}).get("invoice_number") or {}
+        number_path = os.path.join(work, number_info.get("crop") or "")
+        self.header_number_status = number_info.get("status") or False
+        self.header_number_image = (
+            _file_b64(number_path) if number_info.get("crop") and os.path.exists(number_path) else False
+        )
 
         products = {
             p.name.lower(): p for p in self.env["product.product"].search([("sale_ok", "=", True)])

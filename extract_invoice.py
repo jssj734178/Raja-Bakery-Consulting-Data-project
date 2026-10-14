@@ -61,6 +61,13 @@ PRODUCT_ROWS_PATH = os.path.join(_HERE, "product_rows.json")
 # usually lands far outside, e.g. $0.36 or $21.00 for a $3.00 product.
 CATALOG_PRICE_MIN_RATIO = 0.7
 CATALOG_PRICE_MAX_RATIO = 1.1
+# How much of the invoice-number box lies inside the scan (its worse
+# side, as a fraction of the box's height). Set by eye against 40 real
+# pages: at 0.70 and above the number was fully readable (the missing
+# part is only the box's margin), between 0.35 and 0.70 it was visibly
+# clipped, and below 0.35 nothing usable was left.
+INVOICE_NUMBER_OK_INSIDE_FRACTION = 0.70
+INVOICE_NUMBER_MISSING_INSIDE_FRACTION = 0.35
 CHECKPOINT_PATH = os.path.join(_HERE, "checkpoints", "digit_cnn_finetuned.pt")
 
 # Each cell is cropped twice, with different margins, because reading
@@ -344,6 +351,51 @@ def crop_cell(
     return crop, cell_box
 
 
+def crop_invoice_number(image_bgr: np.ndarray, box_proportions: list, corners: np.ndarray):
+    """
+    Cut out the picture of the printed invoice number (top right, above
+    the table) for the reviewer to look at. Nothing is read from it.
+
+    The box is recorded as proportions of the table border, like every
+    other box, but it sits ABOVE the table, so its vertical proportions
+    are negative. That works unchanged with proportion_to_pixel, which
+    extends past the border instead of clamping.
+
+    On many scans the top of the page is simply not in the file (the
+    scan starts partway down), so the box may fall partly or wholly
+    outside the picture. That is reported rather than hidden: the review
+    screen says "not on this scan" instead of showing the smeared edge
+    pixels a warp fills in there.
+
+    Returns:
+        (crop, status) -- the upright BGR crop, and one of "ok" (the
+        number is inside the scan), "cut_off" (partly outside) or "missing"
+        (mostly outside).
+    """
+    crop, _ = crop_cell(image_bgr, box_proportions, corners, 0.0, 0.0)
+    fx1, fy1, fx2, fy2 = box_proportions
+    height, width = image_bgr.shape[:2]
+    pixel_corners = [
+        proportion_to_pixel(fx, fy, corners)
+        for fx in (fx1, fx2) for fy in (fy1, fy2)
+    ]
+    # Fraction of the box's height that lies below the scan's top edge,
+    # measured on its left and right sides separately so a tilted page
+    # is judged by its worse side.
+    inside = 1.0
+    for fx in (fx1, fx2):
+        top_y = proportion_to_pixel(fx, fy1, corners)[1]
+        bottom_y = proportion_to_pixel(fx, fy2, corners)[1]
+        span = max(bottom_y - top_y, 1.0)
+        inside = min(inside, min(max((bottom_y - max(top_y, 0.0)) / span, 0.0), 1.0))
+    in_width = all(0 <= x <= width for x, _ in pixel_corners)
+    if not in_width or inside < INVOICE_NUMBER_MISSING_INSIDE_FRACTION:
+        return crop, "missing"
+    if inside < INVOICE_NUMBER_OK_INSIDE_FRACTION:
+        return crop, "cut_off"
+    return crop, "ok"
+
+
 def snap_cell_box(crop_bgr: np.ndarray, cell_box: tuple) -> tuple:
     """
     Move a calibrated cell box onto the ruled lines that actually
@@ -538,6 +590,18 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
             for row in calibration["rows"]:
                 row["total_price_box"][0] = divider_fx
 
+    header_crops = {}
+    if "invoice_number_box" in calibration:
+        number_crop, number_status = crop_invoice_number(
+            image, calibration["invoice_number_box"], corners
+        )
+        if number_status != "missing":
+            cv2.imwrite(os.path.join(crops_dir, "header_invoice_number.png"), number_crop)
+        header_crops["invoice_number"] = {
+            "status": number_status,
+            "crop": None if number_status == "missing" else "crops/header_invoice_number.png",
+        }
+
     def segment_cell(row, field, box_key):
         """Crop, segment and save one cell -- everything but the model."""
         analysis_crop, cell_box = crop_cell(
@@ -698,7 +762,10 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
             }
         )
 
-    result = {"invoice_flagged": False, "reason": None, "rows": rows_out}
+    result = {
+        "invoice_flagged": False, "reason": None, "rows": rows_out,
+        "header_crops": header_crops,
+    }
     _save_results(result, output_dir)
     return result
 

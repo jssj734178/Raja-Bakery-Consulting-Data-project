@@ -42,6 +42,20 @@
                                    options="{'no_create_edit': False}" context="{'default_customer_rank': 1}"/>
                             <field name="invoice_date" readonly="state == 'sent'"/>
                             <field name="paper_number" readonly="state == 'sent'"/>
+                            <field name="header_number_status" invisible="1"/>
+                            <label for="header_number_image" string="Number on the scan"
+                                   invisible="header_number_status == False or state == 'sent'"/>
+                            <div invisible="header_number_status == False or state == 'sent'">
+                                <field name="header_number_image" widget="image" nolabel="1"
+                                       options="{'size': [0, 48]}"
+                                       invisible="header_number_status == 'missing'"/>
+                                <div class="text-warning" invisible="header_number_status != 'cut_off'">
+                                    The top of this scan is cut off - check the number against the paper copy.
+                                </div>
+                                <div class="text-danger" invisible="header_number_status != 'missing'">
+                                    The invoice number is not on this scan - read it off the paper copy.
+                                </div>
+                            </div>
                             <label for="suggested_paper_number" string="Suggested number"
                                    invisible="not suggested_paper_number or state == 'sent'"/>
                             <div class="o_row" invisible="not suggested_paper_number or state == 'sent'">

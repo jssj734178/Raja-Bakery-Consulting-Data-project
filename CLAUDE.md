@@ -15,7 +15,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_bank.py` | 75 | 19 | 50 | 6 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
-| `extract_invoice.py` | 770 | 348 | 351 | 71 |
+| `extract_invoice.py` | 837 | 384 | 379 | 74 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -28,9 +28,9 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6468** | **2685** | **3089** | **694** |
+| **Total** | **6535** | **2721** | **3117** | **697** |
 
-*Last updated: 2026-10-09.*
+*Last updated: 2026-10-13.*
 
 ## What this is
 
@@ -587,6 +587,96 @@ cents, so a line can differ from the written Total Price by a few cents
 
 **Next:** try it in a browser; run the setup on the real Mac; then remote
 access from outside the bakery, which was preferred but not built.
+
+## The client's Mac: specs and what they mean (recorded 2026-10-09)
+
+**Specs supplied by Jagbir:** MacBook Air 2025, Apple M4 chip, 16 GB memory, macOS Tahoe 26.6.2, 94.91 GB free of 245.11 GB. The client will also use this Mac for other things, so the system must not hog it.
+
+**What the specs settle, and what stays unknown:**
+- 16 GB and 95 GB free are comfortable. The image, database, digit bank and backups should take roughly 10 GB (an estimate, not measured).
+- **Apple silicon means the Docker image builds as Linux ARM.** All testing so far was x86 only. The Dockerfile takes PyTorch CPU from `download.pytorch.org/whl/cpu`, which should have Linux ARM wheels, but this is the likeliest thing to fail on setup day. `odoo:19.0` and `postgres:15` having ARM builds is expected but not confirmed.
+- The Dockerfile installs the newest `torch` (2.14.1 in our test, not the 2.13.0 in `requirements.txt`). Worth pinning so setup day matches what was tested. Not done yet.
+- Docker Desktop on a Mac needs its memory set in Settings > Resources. The setting is a ceiling, not a reservation: Docker only takes what it uses, and gives it all back when Stop Bakery is pressed (it can be slow to hand memory back after a big job). Idle Odoo plus Postgres is probably 1 to 1.5 GB; reading a page with PyTorch probably peaks at 3 to 5 GB. **Both are guesses, never measured.** Planned setting: about 6 GB, which leaves about 10 GB for her other apps. To be confirmed by measuring the peak with `docker stats` in the test container (not done; Jagbir said not yet).
+- An Air has no fan, so a long batch may slow down once it heats up, and so will anything else she is running at the time.
+
+**Estimated reading time on this Mac (a guess, to be replaced by one timed page on setup day):**
+- Measured on the Windows PC (12 cores), through Odoo: about 12 to 14 seconds per page after the first; the first page also pays the model load and up to a minute of waiting for the background job.
+- Estimate for the M4 Air: **10 to 25 seconds per page**; a day of 8 to 14 invoices is roughly 2 to 6 minutes, plus up to a minute for the first page. Reading is in the background, so page 1 can be reviewed while the rest finish.
+
+**Where uploaded PDFs go, and whether the originals can be deleted** (read from `wizard/upload.py` and `models/invoice_scan.py`):
+- The upload splits the PDF into one single-page PDF per invoice and saves each inside Odoo's own storage (the Docker volume `odoo-data`, in Odoo's file store), plus a preview image up to 1600 px and the small box pictures. The upload form's own copy of the big PDF is temporary.
+- So the client's original PDF file (wherever she saved it, for example Downloads) is not needed by Odoo once the pages appear under Scanned invoices. She can delete it. It does not affect Odoo.
+- The reverse also matters: Odoo's copy lives inside Docker's hidden disk image, not in a folder she can see, and that image does not shrink by itself when things are deleted inside it.
+- Growth is probably a few MB per page (single-page scanned PDF plus preview plus pictures), so about 10 to 30 MB a day and a few GB a year. **This is an estimate, not measured.** Measure by checking the size of `odoo-data` after a real week.
+- Not checked: whether `Backup Bakery.command` includes the file store (the page PDFs) as well as the database. Check before telling her it is safe to delete originals, since the page PDFs are the only digital copy of the scan once the original is gone.
+- Related, and already in the code: the 30 MB temporary page image is deleted after each read, and the folder `bakery_scans/<id>` is removed when a scan is finished with.
+
+**Improving speed on the Mac after install (discussed 2026-10-09):**
+- Possible, and Claude Code can be run on that Mac for it. The Mac will need a `git clone` of the repository, since the engine files are copied into the image from the repository root.
+- Safe to do there: measure memory and time per page, and change Docker Desktop settings (memory, CPUs, file sharing). None of that touches the reading code.
+- **Not safe to do there:** changing the reading code or its thresholds. They were tuned and checked against the 96 old scans in `invoices/`, which are gitignored and will not be on the Mac, so there is nothing to compare against. A change made there could quietly alter results. Make those changes on the Windows PC, check with `compare_extractions.py`, then bring them over with `Update Bakery.command`.
+- Any change to engine code needs the image rebuilt (`Update Bakery.command`) to take effect, because the code is baked into the image.
+
+## Ideas that might be implemented soon (discussed 2026-10-09, NOT built, to come back to)
+
+None of these is started. Each is written down with what was decided and why, so a later session can pick it up without re-deriving it.
+
+### A. Header pictures in the Odoo review form: date, invoice number, customer
+
+**Built 2026-10-13 for the INVOICE NUMBER only; date and customer are still not built.** Decided with Jagbir that scan order is not guaranteed, so the "use pages on both sides to infer a number" idea was dropped; the picture is the main aid, and the earlier-page suggestion stays as it was.
+
+- `template_calibration.json` has a new top-level `invoice_number_box` ([0.70, -0.255, 0.95, -0.190], proportions of the table border; the negative y means above the table). Checked by eye on 4 pages from each of the 5 sets of scans (all share the same header layout), then on all 106 pages.
+- `extract_invoice.crop_invoice_number()` cuts it out and reports `ok` / `cut_off` / `missing`, from how much of the box lies inside the scan (thresholds 0.70 and 0.35, set by eye). `results.json` gets `header_crops.invoice_number` and the picture goes in `crops/header_invoice_number.png` (not saved when `missing`, since it would only show smeared edge pixels).
+- Over the 106 old pages: CamScanner 10 ok; NEW RAJA (both) 46 ok, 2 cut off; PH 3 ok, 8 cut off, 13 missing; subzi Mandi 0 ok, 1 cut off, 23 missing. Matches the earlier by-eye count (23 of 24 subzi pages have no number).
+- The Odoo form shows the picture beside the paper-number field, or a red "not on this scan - read it off the paper copy" / amber "possibly cut off" message (`header_number_image`, `header_number_status` on `bakery.invoice.scan`).
+- **Tested:** the crop and status on all 106 pages, `extract_invoice.py` end to end on two pages, and the test Odoo (port 8070, rebuilt and module upgraded on 2026-10-13): a 3-page PDF (one page each of visible / cut off / not on scan) uploaded through the wizard was read in about a minute and each page got the right status, with the picture stored on the visible and cut-off pages and none on the missing one; Odoo built the form view with the new fields. **Also checked in a real browser** (headless Chrome driven by Playwright, 2026-10-13): all three states display correctly, the picture is small (48 px tall, readable) and could be made larger. **Not tested:** the desktop `review_screen.py` does not show the picture yet. The test Odoo still holds the 3 test pages (`header_test - page 1-3`).
+- **Still to do for A:** date and customer boxes (their positions look the same on the scans checked, but the date's handwriting varies a lot in size); picture on the desktop screen if wanted.
+
+**Original plan (for the remaining parts):** show a cropped picture of the handwritten date, the printed invoice number and the customer name next to the Customer, Date and Paper number fields, the way Qty/Return/Total Price already get a picture. Pictures only: nothing is read from them, so there is no accuracy risk.
+
+**Today:** the form has a "Scanned page" tab (`page_preview`, whole page, up to 1600 px). The header can be seen there, but on a separate tab and small.
+
+**What it needs:**
+1. Three header boxes recorded in the calibration, as proportions of the detected table border (same idea as the Qty/Return boxes; a small interactive tool like `calibrate_template.py`). The header sits ABOVE the table. This is the part that needs real scans checked by eye.
+2. `extract_invoice.py` saves the three pictures with the others.
+3. The Odoo form shows them beside the fields.
+
+**Risks:**
+- The header is often missing from the scan: 46% of the old pages had the invoice number cut off or missing (23 of 24 pages in one batch). The form should say "not on this scan" instead of showing a blank or wrong crop, so she reads the number off the paper.
+- Only the invoice number is confirmed to sit in the same spot in every invoice book. The date's and customer's positions have NOT been checked across the four books. Check a sample from each book before calibrating.
+- Tilted or shifted scans may crop the header slightly off; use a generous margin.
+
+**First step when picked up:** look at the date and customer positions on a few pages from each of the four books.
+
+### B. Speed checks on the client's Mac (do when the device is available)
+
+Decided it is mostly NOT worth optimizing: reading is about 2 to 7 minutes a day in the background, and the person's review time is the bigger cost. Do only the quick checks (about 15 minutes), and go further only if a measurement says so.
+
+1. **Check the image is native:** `docker image inspect bakery-odoo --format '{{.Architecture}}'` should say `arm64`. If `amd64`, Docker is emulating Intel and pages could take minutes; that would be worth fixing (platform setting or an x86-only base image, then rebuild).
+2. **Time a 3-page upload.** Pages 2 and 3 under about 30 seconds means done (page 1 includes the model load).
+3. **Measure peak memory** with `docker stats` during a read and set Docker Desktop's memory limit from it (planned: about 6 GB).
+4. **Plugged in, Low Power Mode off** during a batch (the Air has no fan and may throttle).
+
+Only if pages take over about a minute, the first page makes her wait several minutes, or the Mac gets sluggish:
+- **Worker count test:** the box-reading step uses all cores; on the M4's 4 fast + 6 efficient cores, 4 to 6 workers might beat 10. Test 4, 6 and 10 on one page. Make the change on the PC and check with `compare_extractions.py`.
+- **Load the model when Odoo starts**, so the first page of the day doesn't pay the model load (up to a minute saved). A code change; do it on the PC.
+- **Lower render DPI** is the biggest lever (150 DPI is a quarter of the pixels) but is tied to accuracy and to retraining; see "Retraining plan and findings to use then". Do not change it on the Mac.
+
+Not worth doing: the two-scale disagreement flag (doubles reading time).
+
+### C. Other open items raised in the same discussion
+
+- Pin the PyTorch version in `odoo/Dockerfile` (it installs the newest; 2.14.1 in our test, not 2.13.0) and test the pinned build in WSL.
+- Add the Docker Desktop memory step (about 6 GB) to `odoo/README_MAC.md` and the setup-day checklist.
+- Confirm `odoo:19.0` has an ARM (Apple silicon) build, by web search.
+- Measure real peak memory of a page read in the test container (`docker stats`); Jagbir said "not yet".
+- Check whether `Backup Bakery.command` includes Odoo's file store (the page PDFs) and not only the database, before telling the client it is safe to delete her original PDFs.
+- Measure the size of the `odoo-data` volume after a real week to replace the guess of 10 to 30 MB a day.
+- Time one real day's batch end to end, review included (review time has not been measured; it is probably the largest share of the client's time).
+
+### D. How the Odoo form handles a day's batch (confirmed from the code, not yet seen in a browser)
+
+Each page of an uploaded PDF is its own "scanned invoice" with its own status (Waiting to be read, Being read, Ready to review, Invoice created, Needs manual handling). A page can be reviewed as soon as it is "Ready to review" while later pages are still reading; pages can be done in any order and on different days; creating one invoice does not affect the others. The one order dependence: the suggested paper invoice number comes from the nearest EARLIER page of the same PDF that already has a number typed in, so reviewing in order gives the best suggestions.
 
 ## Session record: 2026-10-08 (everything done, in order)
 
