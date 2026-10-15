@@ -18,6 +18,8 @@ import os
 import shutil
 import time
 
+from markupsafe import Markup
+
 from odoo import api, fields, models, tools
 from odoo.exceptions import UserError
 
@@ -376,6 +378,18 @@ class BakeryInvoiceScan(models.Model):
             move.message_post(body=(
                 "Warning: more was returned than ordered on these rows, which shouldn't "
                 "normally happen - check against the paper copy: " + ", ".join(over.mapped("product_name"))
+            ))
+
+        # The invoice line only shows the price, so say in a note which
+        # lines were priced below the catalog (list) price on purpose.
+        discounted = ordered.filtered(
+            lambda l: l.product_id.list_price and l.unit_price < l.product_id.list_price - 0.005
+        )
+        if discounted:
+            # Markup, or Odoo shows the <br/> tags as text; join() escapes the names.
+            move.message_post(body=Markup("Priced below the catalog price on these lines (taken from the handwritten total):<br/>") + Markup("<br/>").join(
+                f"{l.product_id.display_name}: ${l.unit_price:.2f} each (catalog ${l.product_id.list_price:.2f})"
+                for l in discounted
             ))
 
         if post:

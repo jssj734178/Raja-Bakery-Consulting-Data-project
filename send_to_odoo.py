@@ -44,6 +44,29 @@ def _load_product_odoo_ids() -> dict:
     return {row["product_name"]: row.get("odoo_product_id") for row in data["rows"]}
 
 
+def _load_catalog_prices() -> dict:
+    """product_name -> printed catalog price (or None), from product_rows.json."""
+    with open(PRODUCT_ROWS_PATH) as f:
+        data = json.load(f)
+    return {row["product_name"]: row.get("catalog_price") for row in data["rows"]}
+
+
+def _discount_note(ordered_rows: list, catalog_prices: dict):
+    """
+    A plain note listing every line priced below its catalog price, or
+    None. The invoice line itself only shows the price, so without this
+    nothing on the invoice says that a lower price was agreed on purpose.
+    """
+    lines = []
+    for r in ordered_rows:
+        catalog = catalog_prices.get(r["product_name"])
+        if catalog and r["unit_price"] is not None and r["unit_price"] < catalog - 0.005:
+            lines.append(f"{r['product_name']}: ${r['unit_price']:.2f} each (catalog ${catalog:.2f})")
+    if not lines:
+        return None
+    return "Priced below the catalog price on these lines (taken from the handwritten total):\n" + "\n".join(lines)
+
+
 def send_invoice(invoice_name: str, client: OdooClient = None) -> dict:
     """
     Push one already-approved invoice to Odoo as a draft Customer
@@ -155,12 +178,14 @@ def send_invoice(invoice_name: str, client: OdooClient = None) -> dict:
             + ", ".join(over_returned)
         )
 
+    notes = [n for n in (warning, _discount_note(ordered_rows, _load_catalog_prices())) if n]
+
     odoo_invoice_id = client.create_draft_invoice(
         partner_id=partner_id,
         invoice_date=review["invoice_date"],
         ref=paper_number,
         lines=lines,
-        note=warning,
+        note="\n\n".join(notes) or None,
     )
 
     review["odoo_invoice_id"] = odoo_invoice_id
