@@ -17,6 +17,10 @@ password and an internet connection.
    asked). Then in Docker Desktop: Settings (gear) > General > tick **Start
    Docker Desktop when you sign in**. That way the system is already waiting
    when the Mac starts.
+   Also in Docker Desktop: Settings > Resources > set **Memory** to about
+   6 GB (this Mac is shared with other programs; Docker only uses what it
+   needs and gives it back when the system is stopped). Reading a page is
+   the heaviest thing it does - if pages ever fail or crawl, raise it a little.
 2. **Get this folder onto the Mac and run the installer.** Open Terminal
    (Spotlight: type "Terminal"), paste this one line, and press Return:
 

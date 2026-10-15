@@ -8,8 +8,11 @@ USER root
 # CPU-only PyTorch: much smaller than the default download, and the bakery's
 # Mac has no NVIDIA graphics card to use anyway. The same wheel index serves
 # both Intel and Apple-silicon (Linux ARM) Macs, since Docker runs Linux inside.
+# Pinned to the version the Odoo module was tested with (2.14.1, which has a
+# Linux ARM wheel for this image's Python 3.12); requirements.txt's 2.13.0 is
+# only the Windows desktop's version.
 RUN pip3 install --no-cache-dir --break-system-packages \
-        torch --index-url https://download.pytorch.org/whl/cpu
+        torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
 
 # Same versions requirements.txt pins -- the reading thresholds were tuned
 # against these, and OpenCV in particular can behave slightly differently
