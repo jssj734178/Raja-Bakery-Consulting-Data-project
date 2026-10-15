@@ -40,8 +40,40 @@ A pipeline for training a digit-recognition model on handwritten digits found on
 
 - Python 3.14, virtualenv at `venv/` (Windows: `venv\Scripts\python.exe`).
 - Dependencies are pinned in `requirements.txt`: `torch`, `numpy`, `pillow`, `pymupdf`. Install with `venv\Scripts\python.exe -m pip install -r requirements.txt`.
-- This is a git repository with a GitHub remote (`origin`, `main` branch). `checkpoints/`, `invoices/`, `invoice_digits/`, `data/`, and `*.pdf` are all gitignored (see `.gitignore` for why) — checkpoints are regeneratable via `train.py`/`finetune.py`, and the invoice/digit data is real business data that shouldn't sit in git history.
+- This is a git repository with a GitHub remote (`origin`, `main` branch). `checkpoints/`, `invoices/`, `invoice_digits/`, `data/`, and `*.pdf` are all gitignored (see `.gitignore` for why) — checkpoints are regeneratable via `train.py`/`finetune.py` (the one exception: `checkpoints/digit_cnn_finetuned.pt` IS tracked in git, so a fresh clone has the shipped model and the Odoo image build works), and the invoice/digit data is real business data that shouldn't sit in git history.
 - No test suite, linter, or formatter is configured.
+
+## If you are Claude Code running on the client's Mac (read this first)
+
+You are on the machine that will run the real system, not the Windows PC where it was built. Most of this file describes the Windows desktop pipeline; on the Mac only the Docker/Odoo setup in `odoo/` matters. Start with [odoo/SETUP_DAY_CHECKLIST.md](odoo/SETUP_DAY_CHECKLIST.md) (what to run and measure) and [odoo/README_MAC.md](odoo/README_MAC.md) (the install steps). The Mac is a MacBook Air M4, 16 GB, shared with the client's other apps (see "The client's Mac" below); an Air has no fan, so long jobs can slow down.
+
+**What is true here that is not true on the Windows PC**
+- There is NO `invoices/` folder (96 old scans, gitignored business data), no `extractions_full/` baseline, no `venv/`, no `invoice_digits/`, no `data/`. Without those, nothing you change in the reading code can be checked against known-good results.
+- This Mac holds the REAL database (real customers, real invoices once it is in use), not a test copy.
+- Nothing in the Mac scripts (`install_mac.sh`, the Desktop icons, the `--quiet` start, Backup, Update) has ever run on a Mac; they only passed `bash -n`. Expect to fix some of them. Apple-silicon (ARM) Docker builds have never been run either (base images and Python wheels were checked to exist, see "Mac prep done" below).
+
+**You CAN do these (they do not change what the reader outputs)**
+1. Measure: image architecture (`docker image inspect bakery-odoo --format '{{.Architecture}}'` must say `arm64`), time per page for a 3-page upload, peak memory (`docker stats` during a read), size of the `odoo-data` volume after real use.
+2. Change Docker Desktop settings (memory, CPUs, file sharing) and the compose/Dockerfile/install/start/stop/backup/update scripts and `README_MAC.md`, to make the install work or run lighter. Re-run the script after any change and say what you saw; a syntax check is not a test.
+3. Pin or fix package versions in `odoo/Dockerfile` if a build fails (the currently pinned set is tested only on x86).
+4. Change Odoo screens and text (views, labels) in `odoo/addons/bakery_invoice_import/` as long as no value the reader produces or the invoice's numbers change. Rebuild with `Update Bakery.command` and open the screen in a browser before saying it works.
+5. Try speed settings that leave results unchanged, and measure each one: worker count in `extract_invoice.py` (`ThreadPoolExecutor()` near `segment_cell`, default workers) and PyTorch thread count; loading the model when Odoo starts instead of on the first page (`_load_engine` in `models/invoice_scan.py`). **Required check for any such change:** read the SAME 3 pages before and after through Odoo and confirm every row's Qty, Return and Total Price are identical. If you cannot show that, do not keep the change.
+6. Fill in the measured numbers in this file's estimate sections ("The client's Mac", "Improving speed on the Mac"), replacing the guesses, and note what you tried and what happened.
+
+**You must NOT do these here (make the change on the Windows PC, check it with `compare_extractions.py` against the 96 scans, then bring it over with `Update Bakery.command`)**
+- Edit `digit_reader.py`, `alignment.py`, the thresholds/constants in `extract_invoice.py`, `template_calibration.json`, or `product_rows.json`'s prices. They were tuned against the 96 old scans (see the long history below); a change that looks fine on 3 pages can quietly make hundreds of fields worse.
+- Change the render size (300 DPI in `pdf_to_images.py` and the Odoo upload). It is the biggest speed lever but is tied to accuracy and retraining (see "Retraining plan"). Never lower it "to make it faster".
+- Retrain, replace, or edit `checkpoints/digit_cnn_finetuned.pt`.
+- Change how unit price, Qty minus Return, tax, or the draft/post rules are computed.
+
+**Never destroy the real data**
+- Never run `docker compose down -v`, `docker volume rm`, `docker system prune --volumes`, or delete the `odoo-data` / database volumes: that wipes every real invoice. Plain `docker compose down` / `stop` is fine. Take a backup first (`Backup Bakery.command`) before any change that rebuilds or upgrades, and check the backup files are not empty.
+- Do not delete or "clean up" anything under Odoo's data folder, `~/BakeryBackups`, `odoo/.env`, or `odoo/Bakery login.txt` (real passwords; gitignored; never print them into chat, commits or this file).
+- Test on throwaway scans only, and never commit scans, PDFs or invoice pictures (real business data). If real invoices already exist in Odoo, do not edit or create invoices to test; use a clearly named scan and delete only the test record you created.
+
+**How to hand work back**
+- Commit your changes on a branch named `mac-setup`, not `main`, and do not force-push or rewrite history. Put measurements and anything you could not verify in a new file `odoo/MAC_MEASUREMENTS.md` (date, what you ran, numbers, what failed). The Windows PC session will review it, check any reader-affecting idea against the 96 scans, and merge.
+- Say plainly what was tested on the Mac and what was not. If something fails and you cannot fix it without touching the "must not" list above, stop and write it down instead.
 
 ## Pipeline / architecture
 
@@ -682,7 +714,10 @@ Not worth doing: the two-scale disagreement flag (doubles reading time).
 
 Each page of an uploaded PDF is its own "scanned invoice" with its own status (Waiting to be read, Being read, Ready to review, Invoice created, Needs manual handling). A page can be reviewed as soon as it is "Ready to review" while later pages are still reading; pages can be done in any order and on different days; creating one invoice does not affect the others. The one order dependence: the suggested paper invoice number comes from the nearest EARLIER page of the same PDF that already has a number typed in, so reviewing in order gives the best suggestions.
 
-## Start here next session (written 2026-10-13)
+## Start here next session (written 2026-10-13, updated 2026-10-15)
+
+**Done 2026-10-15:** header pictures (customer, date, invoice number) on the desktop screen and the Odoo form; a note on the invoice listing lines priced below catalog; Mac prep from the PC (PyTorch pinned, ARM wheels and base images checked, backup script read, setup-day checklist, memory step, and the section above for Claude Code on the Mac). Still open: everything that needs a Mac (see `odoo/SETUP_DAY_CHECKLIST.md`), remote access, retraining, accuracy. In the list below, only item 4 under header pictures (re-check the 0.70 / 0.35 cut-offs on real new scans) is still open.
+
 
 State: everything is committed and pushed; the working tree is clean apart from the untracked `.claude/` folder. Nothing is half-done. Jagbir decided to tackle all the open items below next time, in whatever order suits. Details for each are in the sections named.
 

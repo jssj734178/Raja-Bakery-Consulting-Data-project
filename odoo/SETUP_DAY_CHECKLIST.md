@@ -1,5 +1,10 @@
 # Setup-day checklist (for whoever installs it, with or without Claude Code)
 
+If you are Claude Code: first read the section "If you are Claude Code running on
+the client's Mac" at the top of CLAUDE.md (what you may and may not change, and
+what never to delete). Write your numbers in `MAC_MEASUREMENTS.md` and commit on
+the `mac-setup` branch.
+
 Nothing in the Mac scripts has been run on a Mac yet - they only passed a
 syntax check. Treat setup day as the first real test and note what fails.
 
