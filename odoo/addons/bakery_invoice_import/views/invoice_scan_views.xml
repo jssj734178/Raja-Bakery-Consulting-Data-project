@@ -36,17 +36,13 @@
                         This page is being read - refresh in a minute.
                     </div>
                     <h1><field name="name"/></h1>
-                    <group invisible="state not in ('review', 'sent')">
-                        <group>
-                            <field name="partner_id" readonly="state == 'sent'"
-                                   options="{'no_create_edit': False}" context="{'default_customer_rank': 1}"/>
-                            <field name="header_customer_status" invisible="1"/>
-                            <label for="header_customer_image" string="Customer on the scan"
-                                   invisible="header_customer_status == False or state == 'sent'"/>
-                            <div invisible="header_customer_status == False or state == 'sent'">
+                    <div class="d-flex flex-wrap mb-3" invisible="state != 'review'">
+                            <div class="me-4 mb-2">
+                                <div class="text-muted small">Customer on the scan</div>
+                                <field name="header_customer_status" invisible="1"/>
                                 <field name="header_customer_image" widget="image" nolabel="1"
-                                       options="{'size': [0, 110]}"
-                                       invisible="header_customer_status == 'missing'"/>
+                                       options="{'size': [0, 90]}"
+                                       invisible="header_customer_status in (False, 'missing')"/>
                                 <div class="text-warning" invisible="header_customer_status != 'cut_off'">
                                     The top of this scan is cut off - check the customer name against the paper copy.
                                 </div>
@@ -54,14 +50,12 @@
                                     The customer name is not on this scan - read it off the paper copy.
                                 </div>
                             </div>
-                            <field name="invoice_date" readonly="state == 'sent'"/>
-                            <field name="header_date_status" invisible="1"/>
-                            <label for="header_date_image" string="Date on the scan"
-                                   invisible="header_date_status == False or state == 'sent'"/>
-                            <div invisible="header_date_status == False or state == 'sent'">
+                            <div class="me-4 mb-2">
+                                <div class="text-muted small">Date on the scan</div>
+                                <field name="header_date_status" invisible="1"/>
                                 <field name="header_date_image" widget="image" nolabel="1"
-                                       options="{'size': [0, 80]}"
-                                       invisible="header_date_status == 'missing'"/>
+                                       options="{'size': [0, 90]}"
+                                       invisible="header_date_status in (False, 'missing')"/>
                                 <div class="text-warning" invisible="header_date_status != 'cut_off'">
                                     The top of this scan is cut off - check the date against the paper copy.
                                 </div>
@@ -69,14 +63,12 @@
                                     The date is not on this scan - read it off the paper copy.
                                 </div>
                             </div>
-                            <field name="paper_number" readonly="state == 'sent'"/>
-                            <field name="header_number_status" invisible="1"/>
-                            <label for="header_number_image" string="Number on the scan"
-                                   invisible="header_number_status == False or state == 'sent'"/>
-                            <div invisible="header_number_status == False or state == 'sent'">
+                            <div class="me-4 mb-2">
+                                <div class="text-muted small">Invoice number on the scan</div>
+                                <field name="header_number_status" invisible="1"/>
                                 <field name="header_number_image" widget="image" nolabel="1"
                                        options="{'size': [0, 90]}"
-                                       invisible="header_number_status == 'missing'"/>
+                                       invisible="header_number_status in (False, 'missing')"/>
                                 <div class="text-warning" invisible="header_number_status != 'cut_off'">
                                     The top of this scan is cut off - check the invoice number against the paper copy.
                                 </div>
@@ -84,6 +76,13 @@
                                     The invoice number is not on this scan - read it off the paper copy.
                                 </div>
                             </div>
+                    </div>
+                    <group invisible="state not in ('review', 'sent')">
+                        <group>
+                            <field name="partner_id" readonly="state == 'sent'"
+                                   options="{'no_create_edit': False}" context="{'default_customer_rank': 1}"/>
+                            <field name="invoice_date" readonly="state == 'sent'"/>
+                            <field name="paper_number" readonly="state == 'sent'"/>
                             <label for="suggested_paper_number" string="Suggested number"
                                    invisible="not suggested_paper_number or state == 'sent'"/>
                             <div class="o_row" invisible="not suggested_paper_number or state == 'sent'">
