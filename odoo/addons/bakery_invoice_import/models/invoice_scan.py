@@ -75,6 +75,11 @@ def _file_b64(path):
         return base64.b64encode(f.read())
 
 
+# How much of a header picture is actually on the scan; see
+# extract_invoice.crop_header_box.
+HEADER_STATUSES = [("ok", "Visible"), ("cut_off", "Possibly cut off"), ("missing", "Not on this scan")]
+
+
 class BakeryInvoiceScan(models.Model):
     _name = "bakery.invoice.scan"
     _description = "Scanned invoice"
@@ -96,16 +101,20 @@ class BakeryInvoiceScan(models.Model):
     pdf_page = fields.Binary("Page PDF", attachment=True, readonly=True)
     page_preview = fields.Image("Page", max_width=1600, max_height=1600, attachment=True, readonly=True)
 
-    # Picture of the printed invoice number from the top of the scan, shown
-    # beside the paper-number field. Nothing is read from it; it is only
-    # there so the reviewer can see what the paper number should be, or see
-    # that the scan doesn't include it (see extract_invoice.crop_invoice_number).
+    # Pictures of the header above the table (printed invoice number,
+    # handwritten date, customer's "Bill To" lines), shown beside the
+    # matching fields. Nothing is read from them; they are only there so
+    # the reviewer can check or fill in the field, or see that the scan
+    # doesn't include the header (see extract_invoice.crop_header_box).
     header_number_image = fields.Image("Invoice number on scan", max_width=900, max_height=300,
                                        attachment=True, readonly=True)
-    header_number_status = fields.Selection(
-        [("ok", "Visible"), ("cut_off", "Possibly cut off"), ("missing", "Not on this scan")],
-        readonly=True,
-    )
+    header_number_status = fields.Selection(HEADER_STATUSES, readonly=True)
+    header_date_image = fields.Image("Date on scan", max_width=900, max_height=300,
+                                     attachment=True, readonly=True)
+    header_date_status = fields.Selection(HEADER_STATUSES, readonly=True)
+    header_customer_image = fields.Image("Customer on scan", max_width=1200, max_height=400,
+                                         attachment=True, readonly=True)
+    header_customer_status = fields.Selection(HEADER_STATUSES, readonly=True)
 
     batch_ref = fields.Char(index=True, readonly=True, help="Same for every page uploaded together in one PDF.")
     page_number = fields.Integer(readonly=True)
@@ -217,12 +226,18 @@ class BakeryInvoiceScan(models.Model):
             })
             return
 
-        number_info = (result.get("header_crops") or {}).get("invoice_number") or {}
-        number_path = os.path.join(work, number_info.get("crop") or "")
-        self.header_number_status = number_info.get("status") or False
-        self.header_number_image = (
-            _file_b64(number_path) if number_info.get("crop") and os.path.exists(number_path) else False
-        )
+        header_crops = result.get("header_crops") or {}
+        for header_name, field_prefix in (
+            ("invoice_number", "header_number"),
+            ("date", "header_date"),
+            ("customer", "header_customer"),
+        ):
+            info = header_crops.get(header_name) or {}
+            path = os.path.join(work, info.get("crop") or "")
+            self[f"{field_prefix}_status"] = info.get("status") or False
+            self[f"{field_prefix}_image"] = (
+                _file_b64(path) if info.get("crop") and os.path.exists(path) else False
+            )
 
         products = {
             p.name.lower(): p for p in self.env["product.product"].search([("sale_ok", "=", True)])

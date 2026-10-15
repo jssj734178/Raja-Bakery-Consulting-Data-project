@@ -310,6 +310,14 @@ class ReviewScreen:
             fg="#7a0000",
         ).pack(side=tk.LEFT)
 
+        # Pictures of the invoice's header (customer, date, printed invoice
+        # number) so each field above can be checked against the paper
+        # without opening the whole scan. Filled in by _show_header_pictures
+        # each time an invoice loads. Nothing is read from them.
+        self.header_frame = tk.Frame(self.root)
+        self.header_frame.pack(fill=tk.X, padx=8, pady=(0, 4), after=cust)
+        self._header_photos = []
+
         # Only "Product" gets a column header here -- Qty and Return
         # are labeled on every row instead (see _build_field), since
         # this header is packed at fixed character widths while the
@@ -394,6 +402,8 @@ class ReviewScreen:
 
         with open(os.path.join(invoice_dir, "results.json")) as f:
             self.results = json.load(f)
+
+        self._show_header_pictures(invoice_dir)
 
         self.review_path = os.path.join(invoice_dir, "review.json")
         existing_review = None
@@ -737,6 +747,35 @@ class ReviewScreen:
             "Upload complete",
             f"Processed {len(new_invoice_names)} {page_word}. Showing the first one now.",
         )
+
+    def _show_header_pictures(self, invoice_dir: str):
+        """Show the customer / date / invoice-number pictures saved by extract_invoice.py."""
+        for widget in self.header_frame.winfo_children():
+            widget.destroy()
+        self._header_photos = []
+        header_crops = self.results.get("header_crops") or {}
+        # (key in results.json, label, display width in pixels, what to say if absent)
+        for key, label, width, what in (
+            ("customer", "Customer", 480, "customer name"),
+            ("date", "Date", 240, "date"),
+            ("invoice_number", "Invoice #", 200, "invoice number"),
+        ):
+            info = header_crops.get(key)
+            if not info:
+                continue
+            box = tk.LabelFrame(self.header_frame, text=label)
+            box.pack(side=tk.LEFT, padx=(0, 8))
+            crop_path = os.path.join(invoice_dir, info["crop"]) if info.get("crop") else None
+            if crop_path and os.path.exists(crop_path):
+                image = Image.open(crop_path)
+                image.thumbnail((width, 200))
+                photo = ImageTk.PhotoImage(image)
+                self._header_photos.append(photo)  # keep a reference, or Tk drops the picture
+                tk.Label(box, image=photo).pack()
+            if info["status"] == "cut_off":
+                tk.Label(box, text=f"Top of scan cut off - check the {what} on paper", fg="#b36b00").pack()
+            elif info["status"] == "missing":
+                tk.Label(box, text=f"Not on this scan - read the {what} off the paper", fg="#b00000").pack()
 
     def _suggest_invoice_number(self, invoice_name: str) -> str:
         """

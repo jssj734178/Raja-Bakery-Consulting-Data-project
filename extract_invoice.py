@@ -61,6 +61,10 @@ PRODUCT_ROWS_PATH = os.path.join(_HERE, "product_rows.json")
 # usually lands far outside, e.g. $0.36 or $21.00 for a $3.00 product.
 CATALOG_PRICE_MIN_RATIO = 0.7
 CATALOG_PRICE_MAX_RATIO = 1.1
+# Header pictures saved for the reviewer; each needs a `<name>_box` in
+# the calibration (proportions of the table border, above the table).
+HEADER_BOXES = ("invoice_number", "date", "customer")
+
 # How much of the invoice-number box lies inside the scan (its worse
 # side, as a fraction of the box's height). Set by eye against 40 real
 # pages: at 0.70 and above the number was fully readable (the missing
@@ -351,10 +355,11 @@ def crop_cell(
     return crop, cell_box
 
 
-def crop_invoice_number(image_bgr: np.ndarray, box_proportions: list, corners: np.ndarray):
+def crop_header_box(image_bgr: np.ndarray, box_proportions: list, corners: np.ndarray):
     """
-    Cut out the picture of the printed invoice number (top right, above
-    the table) for the reviewer to look at. Nothing is read from it.
+    Cut out a picture from the header above the table (the printed
+    invoice number, the handwritten date, or the customer's "Bill To"
+    lines) for the reviewer to look at. Nothing is read from it.
 
     The box is recorded as proportions of the table border, like every
     other box, but it sits ABOVE the table, so its vertical proportions
@@ -591,15 +596,17 @@ def extract_invoice(image_path: str, output_dir: str, model, device) -> dict:
                 row["total_price_box"][0] = divider_fx
 
     header_crops = {}
-    if "invoice_number_box" in calibration:
-        number_crop, number_status = crop_invoice_number(
-            image, calibration["invoice_number_box"], corners
-        )
-        if number_status != "missing":
-            cv2.imwrite(os.path.join(crops_dir, "header_invoice_number.png"), number_crop)
-        header_crops["invoice_number"] = {
-            "status": number_status,
-            "crop": None if number_status == "missing" else "crops/header_invoice_number.png",
+    for header_name in HEADER_BOXES:
+        box_key = f"{header_name}_box"
+        if box_key not in calibration:
+            continue
+        header_crop, header_status = crop_header_box(image, calibration[box_key], corners)
+        crop_name = f"header_{header_name}.png"
+        if header_status != "missing":
+            cv2.imwrite(os.path.join(crops_dir, crop_name), header_crop)
+        header_crops[header_name] = {
+            "status": header_status,
+            "crop": None if header_status == "missing" else f"crops/{crop_name}",
         }
 
     def segment_cell(row, field, box_key):

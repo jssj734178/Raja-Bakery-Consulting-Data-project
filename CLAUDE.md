@@ -15,7 +15,7 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `data.py` | 106 | 23 | 67 | 16 |
 | `digit_bank.py` | 75 | 19 | 50 | 6 |
 | `digit_reader.py` | 1242 | 360 | 780 | 102 |
-| `extract_invoice.py` | 837 | 384 | 379 | 74 |
+| `extract_invoice.py` | 844 | 387 | 382 | 75 |
 | `finetune.py` | 499 | 213 | 224 | 62 |
 | `label_tool.py` | 342 | 160 | 133 | 49 |
 | `line_counts.py` | 122 | 59 | 47 | 16 |
@@ -24,13 +24,13 @@ Maintained via [line_counts.py](line_counts.py) — after any substantive edit t
 | `model.py` | 122 | 22 | 84 | 16 |
 | `odoo_client.py` | 169 | 61 | 96 | 12 |
 | `pdf_to_images.py` | 77 | 35 | 25 | 17 |
-| `review_screen.py` | 1193 | 612 | 477 | 104 |
+| `review_screen.py` | 1232 | 642 | 483 | 107 |
 | `send_to_odoo.py` | 170 | 80 | 69 | 21 |
 | `split_dataset.py` | 107 | 47 | 43 | 17 |
 | `train.py` | 157 | 48 | 79 | 30 |
-| **Total** | **6535** | **2721** | **3117** | **697** |
+| **Total** | **6581** | **2754** | **3126** | **701** |
 
-*Last updated: 2026-10-13.*
+*Last updated: 2026-10-15.*
 
 ## What this is
 
@@ -626,11 +626,11 @@ None of these is started. Each is written down with what was decided and why, so
 **Built 2026-10-13 for the INVOICE NUMBER only; date and customer are still not built.** Decided with Jagbir that scan order is not guaranteed, so the "use pages on both sides to infer a number" idea was dropped; the picture is the main aid, and the earlier-page suggestion stays as it was.
 
 - `template_calibration.json` has a new top-level `invoice_number_box` ([0.70, -0.255, 0.95, -0.190], proportions of the table border; the negative y means above the table). Checked by eye on 4 pages from each of the 5 sets of scans (all share the same header layout), then on all 106 pages.
-- `extract_invoice.crop_invoice_number()` cuts it out and reports `ok` / `cut_off` / `missing`, from how much of the box lies inside the scan (thresholds 0.70 and 0.35, set by eye). `results.json` gets `header_crops.invoice_number` and the picture goes in `crops/header_invoice_number.png` (not saved when `missing`, since it would only show smeared edge pixels).
+- `extract_invoice.crop_header_box()` (renamed 2026-10-15, now used for all three header pictures) cuts it out and reports `ok` / `cut_off` / `missing`, from how much of the box lies inside the scan (thresholds 0.70 and 0.35, set by eye). `results.json` gets `header_crops.invoice_number` and the picture goes in `crops/header_invoice_number.png` (not saved when `missing`, since it would only show smeared edge pixels).
 - Over the 106 old pages: CamScanner 10 ok; NEW RAJA (both) 46 ok, 2 cut off; PH 3 ok, 8 cut off, 13 missing; subzi Mandi 0 ok, 1 cut off, 23 missing. Matches the earlier by-eye count (23 of 24 subzi pages have no number).
 - The Odoo form shows the picture beside the paper-number field, or a red "not on this scan - read it off the paper copy" / amber "possibly cut off" message (`header_number_image`, `header_number_status` on `bakery.invoice.scan`).
 - **Tested:** the crop and status on all 106 pages, `extract_invoice.py` end to end on two pages, and the test Odoo (port 8070, rebuilt and module upgraded on 2026-10-13): a 3-page PDF (one page each of visible / cut off / not on scan) uploaded through the wizard was read in about a minute and each page got the right status, with the picture stored on the visible and cut-off pages and none on the missing one; Odoo built the form view with the new fields. **Also checked in a real browser** (headless Chrome driven by Playwright, 2026-10-13): all three states display correctly, the picture is small (48 px tall, readable) and could be made larger. **Not tested:** the desktop `review_screen.py` does not show the picture yet. The test Odoo still holds the 3 test pages (`header_test - page 1-3`).
-- **Still to do for A:** date and customer boxes (their positions look the same on the scans checked, but the date's handwriting varies a lot in size); picture on the desktop screen if wanted.
+- **Built 2026-10-15: date and customer pictures too, plus the desktop screen.** `template_calibration.json` has `date_box` [0.69, -0.205, 1.0, -0.105] and `customer_box` [0.0, -0.118, 0.68, -0.01] (the customer box is the whole "Bill To" area, both lines, since the name sometimes wraps onto the second line). Checked by eye on 5 pages from each of the 5 scan sets; layout is the same in all of them. `extract_invoice.HEADER_BOXES` lists the three; each gets a status and a `crops/header_<name>.png`. Status over all 106 old pages: customer 106 ok; date 89 ok, 4 cut off, 13 missing; invoice number as before. The Odoo form shows all three pictures (invoice number enlarged to 90 px) with the same cut-off / not-on-scan messages, and `review_screen.py` shows a strip of the three above the rows. **Tested:** the crops on all 106 pages, `extract_invoice.py` end to end on one page, and the desktop screen built against a scratch extraction (screenshot checked). **Not tested:** the Odoo changes (new fields `header_date_*` / `header_customer_*` and the view) have not been rebuilt or upgraded in the test Odoo, so run the refresh recipe below and check the form in a browser. Nothing is read from the pictures, so there is no accuracy risk; the date and customer are still typed or picked by the reviewer.
 
 **Original plan (for the remaining parts):** show a cropped picture of the handwritten date, the printed invoice number and the customer name next to the Customer, Date and Paper number fields, the way Qty/Return/Total Price already get a picture. Pictures only: nothing is read from them, so there is no accuracy risk.
 
@@ -683,8 +683,8 @@ Each page of an uploaded PDF is its own "scanned invoice" with its own status (W
 State: everything is committed and pushed; the working tree is clean apart from the untracked `.claude/` folder. Nothing is half-done. Jagbir decided to tackle all the open items below next time, in whatever order suits. Details for each are in the sections named.
 
 **Header pictures (finish idea A, see "Ideas that might be implemented soon")**
-1. Date and customer boxes: look at more pages from each of the 5 sets of scans first (the invoice number's position is confirmed; the date's handwriting varies in size), add them to `template_calibration.json` next to `invoice_number_box`, and extend `crop_invoice_number` / the Odoo fields the same way.
-2. Show the invoice-number picture on the desktop `review_screen.py` (only the Odoo form has it).
+1. ~~Date and customer boxes~~ built 2026-10-15 (see idea A). Still to do: rebuild the test Odoo with this code and check the new fields in a browser.
+2. ~~Desktop screen picture~~ built 2026-10-15 (strip of all three).
 3. Make the Odoo picture bigger (it is 48 px tall; `options="{'size': [0, 48]}"` in `views/invoice_scan_views.xml`).
 4. Re-check the 0.70 / 0.35 "visible / cut off / missing" cut-offs (`INVOICE_NUMBER_*_INSIDE_FRACTION` in `extract_invoice.py`) on real new scans.
 
