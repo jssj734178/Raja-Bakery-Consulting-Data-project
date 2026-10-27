@@ -88,3 +88,6 @@ catalog_run.log
 # Mac install: generated passwords and the one-time login note -- never commit.
 odoo/.env
 odoo/Bakery login.txt
+
+# Private interview/reference notes -- never goes to GitHub or the client Mac
+PROJECT_OVERVIEW_PRIVATE.md
