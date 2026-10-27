@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- The client should see only the bakery invoice system. These apps come in
+         as dependencies (mail, account, spreadsheet_dashboard) and cannot be
+         uninstalled, but their top-level menus can be hidden. Settings is kept
+         so the administrator can still manage users and passwords. -->
+    <record id="mail.menu_root_discuss" model="ir.ui.menu">
+        <field name="active" eval="False"/>
+    </record>
+    <record id="account.menu_finance" model="ir.ui.menu">
+        <field name="active" eval="False"/>
+    </record>
+    <record id="base.menu_management" model="ir.ui.menu">
+        <field name="active" eval="False"/>
+    </record>
+</odoo>

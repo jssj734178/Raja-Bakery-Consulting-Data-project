@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Reads queued scans in the background, so a big PDF upload never
+         has to finish inside one web request (Odoo cuts those off at about
+         2 minutes). Also kicked off immediately by every upload. -->
+    <record id="cron_read_queued_scans" model="ir.cron">
+        <field name="name">Bakery: read queued invoice scans</field>
+        <field name="model_id" ref="model_bakery_invoice_scan"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_read_queued()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+</odoo>

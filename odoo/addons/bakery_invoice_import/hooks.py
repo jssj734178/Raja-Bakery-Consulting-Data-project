@@ -19,6 +19,14 @@ def _bakery_ml_dir():
 
 
 def post_init_hook(env):
+    # The Dashboards app is only present as a dependency of accounting, and
+    # may not exist yet when this module's data files load, so it is hidden
+    # here with a safe lookup rather than in hide_other_apps.xml.
+    dashboards = env.ref("spreadsheet_dashboard.spreadsheet_dashboard_menu_root",
+                         raise_if_not_found=False)
+    if dashboards:
+        dashboards.active = False
+
     base = _bakery_ml_dir()
     with open(os.path.join(base, "product_rows.json")) as f:
         products = json.load(f)["rows"]

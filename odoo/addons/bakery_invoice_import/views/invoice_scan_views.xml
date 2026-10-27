@@ -20,7 +20,7 @@
         <field name="name">bakery.invoice.scan.form</field>
         <field name="model">bakery.invoice.scan</field>
         <field name="arch" type="xml">
-            <form>
+            <form create="false" duplicate="false">
                 <header>
                     <button name="action_create_posted_invoice" string="Create and post invoice"
                             type="object" class="btn-primary" invisible="state != 'review'"/>
@@ -108,6 +108,7 @@
                                     <field name="return_image" widget="image" options="{'size': [0, 56]}"/>
                                     <field name="total_price"/>
                                     <field name="price_image" widget="image" options="{'size': [0, 56]}"/>
+                                    <field name="unit_price"/>
                                     <field name="flag_text" optional="hide"/>
                                     <field name="product_id" optional="hide"/>
                                 </list>
@@ -136,7 +137,7 @@
         <field name="name">bakery.unpaid.invoices.list</field>
         <field name="model">account.move</field>
         <field name="arch" type="xml">
-            <list create="false">
+            <list create="false" default_order="ref">
                 <field name="partner_id"/>
                 <field name="ref" string="Paper invoice no."/>
                 <field name="invoice_date"/>
@@ -157,12 +158,38 @@
         <field name="view_ids" eval="[(5, 0, 0), (0, 0, {'view_mode': 'list', 'view_id': ref('view_bakery_unpaid_list')}), (0, 0, {'view_mode': 'form', 'view_id': ref('account.view_move_form')})]"/>
     </record>
 
+    <record id="view_bakery_paid_list" model="ir.ui.view">
+        <field name="name">bakery.paid.invoices.list</field>
+        <field name="model">account.move</field>
+        <field name="arch" type="xml">
+            <list create="false" default_order="ref">
+                <field name="partner_id"/>
+                <field name="ref" string="Paper invoice no."/>
+                <field name="invoice_date"/>
+                <field name="name" string="Odoo number"/>
+                <field name="amount_total" sum="Total"/>
+                <field name="payment_state" widget="badge"/>
+                <field name="currency_id" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_bakery_paid" model="ir.actions.act_window">
+        <field name="name">Paid invoices</field>
+        <field name="res_model">account.move</field>
+        <field name="domain">[('move_type', '=', 'out_invoice'), ('state', '=', 'posted'), ('payment_state', 'in', ('paid', 'in_payment'))]</field>
+        <field name="context">{'group_by': ['partner_id'], 'default_move_type': 'out_invoice'}</field>
+        <field name="view_ids" eval="[(5, 0, 0), (0, 0, {'view_mode': 'list', 'view_id': ref('view_bakery_paid_list')}), (0, 0, {'view_mode': 'form', 'view_id': ref('account.view_move_form')})]"/>
+    </record>
+
     <menuitem id="menu_bakery_root" name="Bakery Invoices" sequence="10"
               web_icon="account,static/description/icon.png"/>
     <menuitem id="menu_bakery_scans" name="Scanned invoices" parent="menu_bakery_root"
               action="action_bakery_invoice_scan" sequence="10"/>
     <menuitem id="menu_bakery_unpaid" name="Unpaid invoices" parent="menu_bakery_root"
               action="action_bakery_unpaid" sequence="15"/>
+    <menuitem id="menu_bakery_paid" name="Paid invoices" parent="menu_bakery_root"
+              action="action_bakery_paid" sequence="16"/>
     <menuitem id="menu_bakery_upload" name="Upload scanned invoices" parent="menu_bakery_root"
               action="action_bakery_invoice_upload" sequence="20"/>
 </odoo>

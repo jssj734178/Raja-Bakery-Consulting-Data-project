@@ -620,6 +620,14 @@ cents, so a line can differ from the written Total Price by a few cents
 **Next:** try it in a browser; run the setup on the real Mac; then remote
 access from outside the bakery, which was preferred but not built.
 
+**Odoo screens simplified for the client (2026-10-26).** Goal from Jagbir: the client sees only the invoice system, no distractions. Changes, all in `odoo/addons/bakery_invoice_import/`:
+- **No New / Duplicate button on the scanned-invoice form** (`create="false" duplicate="false"`). The list already had no New, but the form did, and pressing it made a blank record stuck on "This page is being read" that nothing would ever read.
+- **Other apps hidden.** Only Bakery Invoices (plus Settings, for the admin) shows in the app switcher. New `data/hide_other_apps.xml` hides Discuss, Invoicing and Apps; `hooks.py` hides Dashboards on first install with a safe lookup (it comes from a dependency and may not exist when the data files load). These are dependencies (`account`, `mail`) and cannot be uninstalled, only hidden. The install command (`base,account,bakery_invoice_import`) installs nothing unrelated; checked in the test database. The 24 products and 39 customers still load on first install.
+- **Rows table:** shows Total Price, its picture, then **Unit $** (calculated, no picture of its own). The "Qty - Return" column was tried and removed at Jagbir's request; the invoice still uses Qty minus Return.
+- **New "Paid invoices" menu** (posted, paid or in payment), grouped by customer like Unpaid invoices. Both lists sort by paper invoice number inside each customer group. The sort is as text, so a 4-digit number sorts after a 5-digit one; change it if real numbers do that.
+- **Bug found and fixed while committing this:** `.gitignore` had `data/` (meant for the public MNIST folder at the project root), which also hid `odoo/addons/bakery_invoice_import/data/`. `cron.xml` (the background reader) was never in git, so a fresh clone, including the Mac, would have failed to install the module. Now `/data/`, so only the root folder is ignored.
+- **Tested:** the test Odoo (port 8070) rebuilt and the module upgraded without errors after each change; menu list and form attributes checked through the API. **Not tested:** the screens in a browser, a fresh install with the new hide-apps data file, or anything on a Mac.
+
 ## The client's Mac: specs and what they mean (recorded 2026-10-09)
 
 **Specs supplied by Jagbir:** MacBook Air 2025, Apple M4 chip, 16 GB memory, macOS Tahoe 26.6.2, 94.91 GB free of 245.11 GB. The client will also use this Mac for other things, so the system must not hog it.

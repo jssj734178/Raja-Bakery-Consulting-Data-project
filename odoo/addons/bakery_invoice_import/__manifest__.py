@@ -11,6 +11,7 @@
         "wizard/upload_views.xml",
         "views/invoice_scan_views.xml",
         "data/cron.xml",
+        "data/hide_other_apps.xml",
     ],
     "post_init_hook": "post_init_hook",
     "application": True,

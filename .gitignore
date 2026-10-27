@@ -28,7 +28,7 @@ checkpoints/*
 
 # Public MNIST data -- large-ish, and trivially re-downloaded any time
 # via the curl command already documented for data.py.
-data/
+/data/
 
 # Real invoice photos and the labeled digit crops derived from them --
 # actual bakery business/customer data. Excluded by default, not just
